@@ -361,6 +361,7 @@ template Tensor operator==<int32_t>(int32_t, const Tensor&);
 template Tensor operator==<int64_t>(int64_t, const Tensor&);
 template Tensor operator==<float>(float, const Tensor&);
 template Tensor operator==<double>(double, const Tensor&);
+template Tensor operator==<bool>(bool, const Tensor&);
 template Tensor operator==<float16_t>(float16_t, const Tensor&);
 template Tensor operator==<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -369,6 +370,7 @@ template Tensor operator!=<int32_t>(int32_t, const Tensor&);
 template Tensor operator!=<int64_t>(int64_t, const Tensor&);
 template Tensor operator!=<float>(float, const Tensor&);
 template Tensor operator!=<double>(double, const Tensor&);
+template Tensor operator!=<bool>(bool, const Tensor&);
 template Tensor operator!=<float16_t>(float16_t, const Tensor&);
 template Tensor operator!=<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -377,6 +379,7 @@ template Tensor operator>=<int32_t>(int32_t, const Tensor&);
 template Tensor operator>=<int64_t>(int64_t, const Tensor&);
 template Tensor operator>=<float>(float, const Tensor&);
 template Tensor operator>=<double>(double, const Tensor&);
+template Tensor operator>=<bool>(bool, const Tensor&);
 template Tensor operator>=<float16_t>(float16_t, const Tensor&);
 template Tensor operator>=<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -385,6 +388,7 @@ template Tensor operator<=<int32_t>(int32_t, const Tensor&);
 template Tensor operator<=<int64_t>(int64_t, const Tensor&);
 template Tensor operator<=<float>(float, const Tensor&);
 template Tensor operator<=<double>(double, const Tensor&);
+template Tensor operator<=<bool>(bool, const Tensor&);
 template Tensor operator<=<float16_t>(float16_t, const Tensor&);
 template Tensor operator<=<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -393,6 +397,7 @@ template Tensor operator><int32_t>(int32_t, const Tensor&);
 template Tensor operator><int64_t>(int64_t, const Tensor&);
 template Tensor operator><float>(float, const Tensor&);
 template Tensor operator><double>(double, const Tensor&);
+template Tensor operator><bool>(bool, const Tensor&);
 template Tensor operator><float16_t>(float16_t, const Tensor&);
 template Tensor operator><bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -401,6 +406,7 @@ template Tensor operator< <int32_t>(int32_t, const Tensor&);
 template Tensor operator< <int64_t>(int64_t, const Tensor&);
 template Tensor operator< <float>(float, const Tensor&);
 template Tensor operator< <double>(double, const Tensor&);
+template Tensor operator< <bool>(bool, const Tensor&);
 template Tensor operator< <float16_t>(float16_t, const Tensor&);
 template Tensor operator< <bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -409,6 +415,7 @@ template Tensor operator==<int32_t>(const Tensor&, int32_t);
 template Tensor operator==<int64_t>(const Tensor&, int64_t);
 template Tensor operator==<float>(const Tensor&, float);
 template Tensor operator==<double>(const Tensor&, double);
+template Tensor operator==<bool>(const Tensor&, bool);
 template Tensor operator==<float16_t>(const Tensor&, float16_t);
 template Tensor operator==<bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -417,6 +424,7 @@ template Tensor operator!=<int32_t>(const Tensor&, int32_t);
 template Tensor operator!=<int64_t>(const Tensor&, int64_t);
 template Tensor operator!=<float>(const Tensor&, float);
 template Tensor operator!=<double>(const Tensor&, double);
+template Tensor operator!=<bool>(const Tensor&, bool);
 template Tensor operator!=<float16_t>(const Tensor&, float16_t);
 template Tensor operator!=<bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -425,6 +433,7 @@ template Tensor operator>=<int32_t>(const Tensor&, int32_t);
 template Tensor operator>=<int64_t>(const Tensor&, int64_t);
 template Tensor operator>=<float>(const Tensor&, float);
 template Tensor operator>=<double>(const Tensor&, double);
+template Tensor operator>=<bool>(const Tensor&, bool);
 template Tensor operator>=<float16_t>(const Tensor&, float16_t);
 template Tensor operator>=<bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -433,6 +442,7 @@ template Tensor operator<=<int32_t>(const Tensor&, int32_t);
 template Tensor operator<=<int64_t>(const Tensor&, int64_t);
 template Tensor operator<=<float>(const Tensor&, float);
 template Tensor operator<=<double>(const Tensor&, double);
+template Tensor operator<=<bool>(const Tensor&, bool);
 template Tensor operator<=<float16_t>(const Tensor&, float16_t);
 template Tensor operator<=<bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -441,6 +451,7 @@ template Tensor operator><int32_t>(const Tensor&, int32_t);
 template Tensor operator><int64_t>(const Tensor&, int64_t);
 template Tensor operator><float>(const Tensor&, float);
 template Tensor operator><double>(const Tensor&, double);
+template Tensor operator><bool>(const Tensor&, bool);
 template Tensor operator><float16_t>(const Tensor&, float16_t);
 template Tensor operator><bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -449,6 +460,7 @@ template Tensor operator< <int32_t>(const Tensor&, int32_t);
 template Tensor operator< <int64_t>(const Tensor&, int64_t);
 template Tensor operator< <float>(const Tensor&, float);
 template Tensor operator< <double>(const Tensor&, double);
+template Tensor operator< <bool>(const Tensor&, bool);
 template Tensor operator< <float16_t>(const Tensor&, float16_t);
 template Tensor operator< <bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -457,6 +469,7 @@ template Tensor logical_AND<int32_t>(const Tensor&, int32_t);
 template Tensor logical_AND<int64_t>(const Tensor&, int64_t);
 template Tensor logical_AND<float>(const Tensor&, float);
 template Tensor logical_AND<double>(const Tensor&, double);
+template Tensor logical_AND<bool>(const Tensor&, bool);
 template Tensor logical_AND<float16_t>(const Tensor&, float16_t);
 template Tensor logical_AND<bfloat16_t>(const Tensor&, bfloat16_t);
 
@@ -465,6 +478,7 @@ template Tensor logical_OR<int32_t>(const Tensor&, int32_t);
 template Tensor logical_OR<int64_t>(const Tensor&, int64_t);
 template Tensor logical_OR<float>(const Tensor&, float);
 template Tensor logical_OR<double>(const Tensor&, double);
+template Tensor logical_OR<bool>(const Tensor&, bool);
 template Tensor logical_OR<float16_t>(const Tensor&, float16_t);
 template Tensor logical_OR<bfloat16_t>(const Tensor&, bfloat16_t);  
 
@@ -473,6 +487,7 @@ template Tensor logical_XOR<int32_t>(const Tensor&, int32_t);
 template Tensor logical_XOR<int64_t>(const Tensor&, int64_t);
 template Tensor logical_XOR<float>(const Tensor&, float);
 template Tensor logical_XOR<double>(const Tensor&, double);
+template Tensor logical_XOR<bool>(const Tensor&, bool);
 template Tensor logical_XOR<float16_t>(const Tensor&, float16_t);
 template Tensor logical_XOR<bfloat16_t>(const Tensor&, bfloat16_t); 
 
@@ -481,6 +496,7 @@ template Tensor logical_NOT<int32_t>(int32_t);
 template Tensor logical_NOT<int64_t>(int64_t);
 template Tensor logical_NOT<float>(float);
 template Tensor logical_NOT<double>(double);
+template Tensor logical_NOT<bool>( bool);
 template Tensor logical_NOT<float16_t>(float16_t);
 template Tensor logical_NOT<bfloat16_t>(bfloat16_t);
 
@@ -489,6 +505,7 @@ template Tensor logical_AND<int32_t>(int32_t, const Tensor&);
 template Tensor logical_AND<int64_t>(int64_t, const Tensor&);
 template Tensor logical_AND<float>(float, const Tensor&);
 template Tensor logical_AND<double>(double, const Tensor&);
+template Tensor logical_AND<bool>(bool, const Tensor&);
 template Tensor logical_AND<float16_t>(float16_t, const Tensor&);
 template Tensor logical_AND<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -497,6 +514,7 @@ template Tensor logical_OR<int32_t>(int32_t, const Tensor&);
 template Tensor logical_OR<int64_t>(int64_t, const Tensor&);
 template Tensor logical_OR<float>(float, const Tensor&);
 template Tensor logical_OR<double>(double, const Tensor&);
+template Tensor logical_OR<bool>(bool, const Tensor&);
 template Tensor logical_OR<float16_t>(float16_t, const Tensor&);
 template Tensor logical_OR<bfloat16_t>(bfloat16_t, const Tensor&);
 
@@ -505,6 +523,7 @@ template Tensor logical_XOR<int32_t>(int32_t, const Tensor&);
 template Tensor logical_XOR<int64_t>(int64_t, const Tensor&);
 template Tensor logical_XOR<float>(float, const Tensor&);
 template Tensor logical_XOR<double>(double, const Tensor&);
+template Tensor logical_XOR<bool>(bool, const Tensor&);
 template Tensor logical_XOR<float16_t>(float16_t, const Tensor&);
 template Tensor logical_XOR<bfloat16_t>(bfloat16_t, const Tensor&);
 
