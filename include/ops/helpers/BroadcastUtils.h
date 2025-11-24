@@ -38,4 +38,41 @@ inline bool broadcast_compatible(const std::vector<int64_t>& shape_a,
     }
 }
 
+// Check if rhs can be broadcasted to lhs shape and return the target shape
+// Throws error if rhs has higher dimensionality than lhs or shapes are incompatible
+inline std::vector<int64_t> broadcast_rhs_to_lhs(const std::vector<int64_t>& lhs_shape,
+                                                 const std::vector<int64_t>& rhs_shape) {
+    size_t lhs_ndim = lhs_shape.size();
+    size_t rhs_ndim = rhs_shape.size();
+    
+    // Error if rhs has more dimensions than lhs
+    if (rhs_ndim > lhs_ndim) {
+        throw std::runtime_error("Cannot broadcast: rhs tensor has higher dimensionality (" 
+                               + std::to_string(rhs_ndim) + ") than lhs tensor (" 
+                               + std::to_string(lhs_ndim) + ")");
+    }
+    
+    // Check if rhs can be broadcasted to lhs shape
+    // Broadcasting rules: iterate from right to left, dimensions must be either:
+    // 1. Equal
+    // 2. rhs dimension is 1
+    // 3. rhs dimension doesn't exist (implicit 1)
+    for (size_t i = 0; i < lhs_ndim; ++i) {
+        int64_t lhs_dim = lhs_shape[lhs_ndim - 1 - i];
+        int64_t rhs_dim = (i < rhs_ndim) ? rhs_shape[rhs_ndim - 1 - i] : 1;
+        
+        // Check if broadcasting is valid for this dimension
+        if (rhs_dim != lhs_dim && rhs_dim != 1) {
+            throw std::runtime_error("Shapes are not broadcastable: rhs dimension " 
+                                   + std::to_string(rhs_dim) + " cannot broadcast to lhs dimension " 
+                                   + std::to_string(lhs_dim) + " at position " 
+                                   + std::to_string(i) + " (from right)");
+        }
+    }
+    
+    // If all checks pass, return the lhs shape (target shape after broadcasting)
+    return lhs_shape;
 }
+
+}
+

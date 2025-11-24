@@ -11,29 +11,6 @@ namespace OwnTensor {
 
 namespace {
 
-// Device helpers for fp16/bf16 (reuse from ScalarOps.cu)
-__device__ inline float dev_bf16_to_float(uint16_t b) {
-    uint32_t u = ((uint32_t)b) << 16;
-    return __uint_as_float(u);
-}
-
-__device__ inline uint16_t dev_float_to_bf16(float f) {
-    uint32_t u = __float_as_uint(f);
-    uint32_t lsb = (u >> 16) & 1u;
-    u += 0x7FFFu + lsb;
-    return (uint16_t)(u >> 16);
-}
-
-__device__ inline float dev_fp16_to_float(uint16_t bits) {
-    __half h = *reinterpret_cast<__half*>(&bits);
-    return __half2float(h);
-}
-
-__device__ inline uint16_t dev_float_to_fp16(float f) {
-    __half h = __float2half_rn(f);
-    return *reinterpret_cast<uint16_t*>(&h);
-}
-
 // Generic where kernel
 template<typename CondT, typename DataT>
 __global__ void k_where(const CondT* condition, const DataT* input,
@@ -47,24 +24,27 @@ __global__ void k_where(const CondT* condition, const DataT* input,
 }
 
 // Specialized kernel for fp16/bf16
-template<typename CondT>
-__global__ void k_where_fp16(const CondT* condition, const uint16_t* input,
-                             const uint16_t* other, uint16_t* out, 
-                             size_t n, int fmt) {
+template<typename CondT, typename __half>
+__global__ void k_where_fp16(const CondT* condition, const __half* input,
+                             const __half* other, __half* out, 
+                             size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
          i += blockDim.x * gridDim.x) {
         bool cond = (condition[i] != static_cast<CondT>(0));
-        
-        // Convert to float, select, convert back
-        float input_val = (fmt == 1) ? dev_fp16_to_float(input[i])
-                                     : dev_bf16_to_float(input[i]);
-        float other_val = (fmt == 1) ? dev_fp16_to_float(other[i])
-                                     : dev_bf16_to_float(other[i]);
-        float result = cond ? input_val : other_val;
-        
-        out[i] = (fmt == 1) ? dev_float_to_fp16(result)
-                            : dev_float_to_bf16(result);
+        out[i] = cond ? input[i] : other[i]; 
+    }
+}
+
+template<typename CondT, typename __nv_bfloat16>
+__global__ void k_where_bf16(const CondT* condition, const __nv_bfloat16* input,
+                             const __nv_bfloat16* other, __nv_bfloat16* out, 
+                             size_t n) {
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += blockDim.x * gridDim.x) {
+        bool cond = (condition[i] != static_cast<CondT>(0));
+        out[i] = cond ? input[i] : other[i]; 
     }
 }
 
@@ -96,15 +76,23 @@ void cuda_where(const Tensor& condition, const Tensor& input,
         using CondT = decltype(cond_type);
         const CondT* cond_ptr = condition.data<CondT>();
         
-        if (input_dtype == Dtype::Float16 || input_dtype == Dtype::Bfloat16) {
-            int fmt = (input_dtype == Dtype::Float16) ? 1 : 2;
-            const uint16_t* input_ptr = input.data<uint16_t>();
-            const uint16_t* other_ptr = other.data<uint16_t>();
-            uint16_t* out_ptr = out.data<uint16_t>();
+        if (input_dtype == Dtype::Float16) {
+            const __half* input_ptr = input.data<__half>();
+            const __half* other_ptr = other.data<__half>();
+            __half* out_ptr = out.data<__half>();
             
             k_where_fp16<<<grid, block>>>(cond_ptr, input_ptr, other_ptr, 
-                                          out_ptr, n, fmt);
-        } else {
+                                          out_ptr, n);
+        } else if(input_dtype == Dtype::Bfloat16)
+        {
+            const __nv_bfloat16* input_ptr = input.data<__nv_bfloat16>();
+            const __nv_bfloat16* other_ptr = other.data<__nv_bfloat16>();
+            __nv_bfloat16* out_ptr = out.data<__nv_bfloat16>();
+            
+            k_where_fp16<<<grid, block>>>(cond_ptr, input_ptr, other_ptr, 
+                                          out_ptr, n);
+        }
+         else {
             dispatch_by_dtype(input_dtype, [&](auto data_type) {
                 using DataT = decltype(data_type);
                 const DataT* input_ptr = input.data<DataT>();
@@ -119,6 +107,141 @@ void cuda_where(const Tensor& condition, const Tensor& input,
     
     check_cuda_error("cuda_where");
 }
+
+// ============================================================================
+// SCALAR BACKEND VARIANTS - CUDA
+// ============================================================================
+
+// Kernel 1: Scalar input, Tensor other
+template<typename DataT>
+__global__ void k_where_scalar_tensor(const bool* condition, DataT input_val,
+                                       const DataT* other, DataT* out, size_t n) {
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
+         i < n; 
+         i += blockDim.x * gridDim.x) {
+        out[i] = condition[i] ? input_val : other[i];
+    }
+}
+
+// Kernel 2: Tensor input, Scalar other
+template<typename DataT>
+__global__ void k_where_tensor_scalar(const bool* condition, const DataT* input,
+                                       DataT other_val, DataT* out, size_t n) {
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
+         i < n; 
+         i += blockDim.x * gridDim.x) {
+        out[i] = condition[i] ? input[i] : other_val;
+    }
+}
+
+// Kernel 3: Both scalars
+template<typename DataT>
+__global__ void k_where_scalar_scalar(const bool* condition, DataT input_val,
+                                       DataT other_val, DataT* out, size_t n) {
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
+         i < n; 
+         i += blockDim.x * gridDim.x) {
+        out[i] = condition[i] ? input_val : other_val;
+    }
+}
+
+// Host function 1: Scalar input, Tensor other
+template<typename T>
+void cuda_where_scalar_tensor(const Tensor& condition, T input_scalar, 
+                               const Tensor& other, Tensor& out) {
+    const size_t n = out.numel();
+    const dim3 block(256);
+    const dim3 grid = pick_grid(n, block);
+    
+    const bool* cond_ptr = condition.data<bool>();
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const scalar_t* other_ptr = other.data<scalar_t>();
+        scalar_t* out_ptr = out.data<scalar_t>();
+        scalar_t input_val = static_cast<scalar_t>(input_scalar);
+        
+        k_where_scalar_tensor<<<grid, block>>>(cond_ptr, input_val, other_ptr, out_ptr, n);
+    });
+    
+    check_cuda_error("cuda_where_scalar_tensor");
+}
+
+// Host function 2: Tensor input, Scalar other
+template<typename T>
+void cuda_where_tensor_scalar(const Tensor& condition, const Tensor& input, 
+                               T other_scalar, Tensor& out) {
+    const size_t n = out.numel();
+    const dim3 block(256);
+    const dim3 grid = pick_grid(n, block);
+    
+    const bool* cond_ptr = condition.data<bool>();
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const scalar_t* input_ptr = input.data<scalar_t>();
+        scalar_t* out_ptr = out.data<scalar_t>();
+        scalar_t other_val = static_cast<scalar_t>(other_scalar);
+        
+        k_where_tensor_scalar<<<grid, block>>>(cond_ptr, input_ptr, other_val, out_ptr, n);
+    });
+    
+    check_cuda_error("cuda_where_tensor_scalar");
+}
+
+// Host function 3: Both scalars
+template<typename T, typename U>
+void cuda_where_scalar_scalar(const Tensor& condition, T input_scalar, 
+                               U other_scalar, Tensor& out) {
+    const size_t n = out.numel();
+    const dim3 block(256);
+    const dim3 grid = pick_grid(n, block);
+    
+    const bool* cond_ptr = condition.data<bool>();
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        scalar_t* out_ptr = out.data<scalar_t>();
+        scalar_t input_val = static_cast<scalar_t>(input_scalar);
+        scalar_t other_val = static_cast<scalar_t>(other_scalar);
+        
+        k_where_scalar_scalar<<<grid, block>>>(cond_ptr, input_val, other_val, out_ptr, n);
+    });
+    
+    check_cuda_error("cuda_where_scalar_scalar");
+}
+
+// Explicit instantiations
+template void cuda_where_scalar_tensor<int>(const Tensor&, int, const Tensor&, Tensor&);
+template void cuda_where_scalar_tensor<float>(const Tensor&, float, const Tensor&, Tensor&);
+template void cuda_where_scalar_tensor<double>(const Tensor&, double, const Tensor&, Tensor&);
+template void cuda_where_scalar_tensor<long>(const Tensor&, long, const Tensor&, Tensor&);
+
+template void cuda_where_tensor_scalar<int>(const Tensor&, const Tensor&, int, Tensor&);
+template void cuda_where_tensor_scalar<float>(const Tensor&, const Tensor&, float, Tensor&);
+template void cuda_where_tensor_scalar<double>(const Tensor&, const Tensor&, double, Tensor&);
+template void cuda_where_tensor_scalar<long>(const Tensor&, const Tensor&, long, Tensor&);
+
+template void cuda_where_scalar_scalar<int, int>(const Tensor&, int, int, Tensor&);
+template void cuda_where_scalar_scalar<float, float>(const Tensor&, float, float, Tensor&);
+template void cuda_where_scalar_scalar<double, double>(const Tensor&, double, double, Tensor&);
+template void cuda_where_scalar_scalar<long, long>(const Tensor&, long, long, Tensor&);
+
+template void cuda_where_scalar_scalar<int, float>(const Tensor&, int, float, Tensor&);
+template void cuda_where_scalar_scalar<int, double>(const Tensor&, int, double, Tensor&);
+template void cuda_where_scalar_scalar<int, long>(const Tensor&, int, long, Tensor&);
+
+template void cuda_where_scalar_scalar<float, int>(const Tensor&, float, int, Tensor&);
+template void cuda_where_scalar_scalar<float, double>(const Tensor&, float, double, Tensor&);
+template void cuda_where_scalar_scalar<float, long>(const Tensor&, float, long, Tensor&);
+
+template void cuda_where_scalar_scalar<double,int>(const Tensor&,double,int,Tensor&);
+template void cuda_where_scalar_scalar<double,float>(const Tensor&,double,float,Tensor&);
+template void cuda_where_scalar_scalar<double,long>(const Tensor&,double,long,Tensor&);
+
+template void cuda_where_scalar_scalar<long, int>(const Tensor&, long, int, Tensor&);
+template void cuda_where_scalar_scalar<long, float>(const Tensor&, long, float, Tensor&);
+template void cuda_where_scalar_scalar<long, double>(const Tensor&, long, double, Tensor&);
 
 } // namespace OwnTensor
 
