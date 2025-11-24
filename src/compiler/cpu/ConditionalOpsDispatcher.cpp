@@ -1,21 +1,24 @@
 #include <stdexcept>
+#include "core/Tensor.h"
 #include "ops/helpers/ConditionalOps.h"
+#include "ops/helpers/BroadcastUtils.h"  // ✅ For broadcast_rhs_to_lhs
 #include "core/TensorDispatch.h"
 #include "dtype/Types.h"
-
+#include "dtype/DtypeTraits.h"  // ✅ For type_to_dtype and promote_dtypes_bool
+using namespace std;
 namespace OwnTensor {
 
-// Backend declarations
-void cpu_where(const Tensor& condition, const Tensor& input, 
-               const Tensor& other, Tensor& out);
-void cuda_where(const Tensor& condition, const Tensor& input,
-                const Tensor& other, Tensor& out);
+// // Backend declarations
+// void cpu_where(const Tensor& condition, const Tensor& input, 
+//                const Tensor& other, Tensor& out);
+// void cuda_where(const Tensor& condition, const Tensor& input,
+//                 const Tensor& other, Tensor& out);
 
 // Main where implementation
-Tensor where(const Tensor& condition, const Tensor& input, const Tensor& other) {
+    Tensor where(const Tensor& condition, const Tensor& input, const Tensor& other) {
     // Validate condition dtype
-    if (condition.dtype() != Dtype::Int32 && condition.dtype() != Dtype::Int64) {
-        throw std::runtime_error("Condition must be Int32 or Int64 dtype");
+    if (condition.dtype() != Dtype::Bool) {
+        throw std::runtime_error("Condition must be Bool dtype");
     }
     
     // Validate all tensors on same device
@@ -23,23 +26,20 @@ Tensor where(const Tensor& condition, const Tensor& input, const Tensor& other) 
         throw std::runtime_error("All tensors must be on the same device");
     }
     
-    // For simplicity, require same shape (broadcasting can be added later)
-    if (condition.shape() != input.shape() || input.shape() != other.shape()) {
-        throw std::runtime_error("All tensors must have the same shape");
-    }
+    // ✅ Determine output dtype (promote input and other)
+    Dtype output_dtype = promote_dtypes_bool(input.dtype(), other.dtype());
     
-    // Determine output dtype (promote input and other)
-    Dtype output_dtype = input.dtype();
-    if (input.dtype() != other.dtype()) {
-        // Simple promotion: Float64 > Float32 > Int64 > Int32 > Int16
-        if (other.dtype() == Dtype::Float64 || input.dtype() == Dtype::Float64)
-            output_dtype = Dtype::Float64;
-        else if (other.dtype() == Dtype::Float32 || input.dtype() == Dtype::Float32)
-            output_dtype = Dtype::Float32;
+    // ✅ Compute output shape (broadcasting)
+    Shape output_shape = condition.shape();
+    if (condition.shape().dims != input.shape().dims || condition.shape().dims != other.shape().dims) {
+        // Need to broadcast - compute the broadcasted shape
+        std::vector<int64_t> temp_shape = broadcast_shape(condition.shape().dims, input.shape().dims);
+        temp_shape = broadcast_shape(temp_shape, other.shape().dims);
+        output_shape = Shape{temp_shape};
     }
     
     // Create output tensor
-    Tensor out(input.shape(), output_dtype, input.device(), false);
+    Tensor out(output_shape, output_dtype, input.device(), false);
     
     // Dispatch to backend
     if (condition.device().is_cuda()) {
@@ -51,26 +51,9 @@ Tensor where(const Tensor& condition, const Tensor& input, const Tensor& other) 
     return out;
 }
 
-// Scalar overloads - create full tensors and call main function
-Tensor where(const Tensor& condition, double input_scalar, const Tensor& other) {
-    // Create tensor filled with scalar value
-    Tensor input_tensor(condition.shape(), other.dtype(), condition.device(), false);
-    input_tensor.fill(static_cast<float>(input_scalar));
-    return where(condition, input_tensor, other);
-}
-
-Tensor where(const Tensor& condition, const Tensor& input, double other_scalar) {
-    Tensor other_tensor(condition.shape(), input.dtype(), condition.device(), false);
-    other_tensor.fill(static_cast<float>(other_scalar));
-    return where(condition, input, other_tensor);
-}
-
-Tensor where(const Tensor& condition, double input_scalar, double other_scalar) {
-    Tensor input_tensor(condition.shape(), Dtype::Float32, condition.device(), false);
-    input_tensor.fill(static_cast<float>(input_scalar));
-    Tensor other_tensor(condition.shape(), Dtype::Float32, condition.device(), false);
-    other_tensor.fill(static_cast<float>(other_scalar));
-    return where(condition, input_tensor, other_tensor);
-}
+// ============================================================================
+// NOTE: Template scalar overloads are now implemented inline in the header
+// (ConditionalOps.h) to avoid explicit instantiations
+// ============================================================================
 
 } // namespace OwnTensor

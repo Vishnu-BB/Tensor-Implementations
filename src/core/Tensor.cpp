@@ -545,26 +545,6 @@ namespace OwnTensor
         return device_.is_cuda();
     }
 
-    // Simple type promotion for where operation
-    static Dtype promote_dtypes_internal(Dtype a, Dtype b) {
-        if (a == b) return a;
-        
-        // Promotion hierarchy: Float64 > Float32 > Int64 > Int32 > Int16
-        auto rank = [](Dtype d) -> int {
-            switch(d) {
-                case Dtype::Float64: return 5;
-                case Dtype::Float32: return 4;
-                case Dtype::Int64: return 3;
-                case Dtype::Int32: return 2;
-                case Dtype::Int16: return 1;
-                case Dtype::Float16: return 4;
-                case Dtype::Bfloat16: return 4;
-                default: return 0;
-            }
-        };
-        
-        return (rank(a) > rank(b)) ? a : b;
-    }
 Tensor Tensor::to_bool() const {
     Tensor result({this->shape()}, TensorOptions()
         .with_dtype(Dtype::Bool)
@@ -606,109 +586,6 @@ Tensor Tensor::to_bool() const {
     
     return result;
 }
-    // Simple shape broadcasting check (for now, require exact match)
-    static bool shapes_match(const Shape& a, const Shape& b) {
-        if (a.dims.size() != b.dims.size()) return false;
-        for (size_t i = 0; i < a.dims.size(); ++i) {
-            if (a.dims[i] != b.dims[i]) return false;
-        }
-        return true;
-    }
-
-    // ============================================================================
-    // WHERE Implementation
-    // ============================================================================
-
-    // Main where implementation - simplified version without broadcasting
-    Tensor Tensor::where(const Tensor& condition, const Tensor& input, const Tensor& other) {
-    // Validate condition dtype
-        if (condition.dtype_ != Dtype::Int32 && condition.dtype_ != Dtype::Int64 ) {
-            throw std::invalid_argument("Condition must be Int32 or Int64 dtype");
-        }
-        
-        // Validate same device
-        if (condition.device_.device != input.device_.device || 
-            input.device_.device != other.device_.device) {
-            throw std::invalid_argument("All tensors must be on same device");
-        }
-        
-        // Validate same shape
-        if (!shapes_match(condition.shape_, input.shape_) || 
-            !shapes_match(input.shape_, other.shape_)) {
-            throw std::invalid_argument("All tensors must have same shape");
-        }
-        
-        // Determine output dtype
-        Dtype output_dtype = promote_dtypes_internal(input.dtype_, other.dtype_);
-        
-        // Create output tensor
-        Tensor result(input.shape_, output_dtype, input.device_, false);
-        
-        // Dispatch to CPU or CUDA backend
-        if (condition.is_cpu()) {
-            cpu_where(condition, input, other, result);
-        } else {
-    #ifdef WITH_CUDA
-            cuda_where(condition, input, other, result);
-    #else
-            throw std::runtime_error("CUDA support not compiled");
-    #endif
-        }
-        
-        return result;
-    }
-
-    // Scalar overload - requires Tensor::full() implementation
-    // For now, just throw an error or create manually
-    Tensor Tensor::where(const Tensor& condition, float input_scalar, const Tensor& other) {
-        // Create tensor filled with scalar
-        Tensor input_tensor(condition.shape_, other.dtype_, condition.device_, false);
-        
-        // Fill with scalar value
-        const size_t n = input_tensor.numel();
-        if (other.dtype_ == Dtype::Float32) {
-            float* ptr = input_tensor.data<float>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = input_scalar;
-        } else if (other.dtype_ == Dtype::Int32) {
-            int32_t* ptr = input_tensor.data<int32_t>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(input_scalar);
-        } else {
-            throw std::runtime_error("where scalar overload: unsupported dtype");
-        }
-        
-        return where(condition, input_tensor, other);
-    }
-
-    Tensor Tensor::where(const Tensor& condition, const Tensor& input, float other_scalar) {
-        Tensor other_tensor(condition.shape_, input.dtype_, condition.device_, false);
-        
-        const size_t n = other_tensor.numel();
-        if (input.dtype_ == Dtype::Float32) {
-            float* ptr = other_tensor.data<float>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = other_scalar;
-        } else if (input.dtype_ == Dtype::Int32) {
-            int32_t* ptr = other_tensor.data<int32_t>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(other_scalar);
-        }
-        
-        return where(condition, input, other_tensor);
-    }
-
-    Tensor Tensor::where(const Tensor& condition, float input_scalar, float other_scalar) {
-        Tensor input_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
-        Tensor other_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
-        
-        const size_t n = input_tensor.numel();
-        float* input_ptr = input_tensor.data<float>();
-        float* other_ptr = other_tensor.data<float>();
-        
-        for (size_t i = 0; i < n; ++i) {
-            input_ptr[i] = input_scalar;
-            other_ptr[i] = other_scalar;
-        }
-        
-        return where(condition, input_tensor, other_tensor);
-    }
 
     // bool 
     template const bool* Tensor::data<bool>() const;

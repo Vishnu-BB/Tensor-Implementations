@@ -68,17 +68,6 @@ Tensor cuda_s_geq_copy( double,const Tensor&, cudaStream_t); //✨✨✨
 Tensor cuda_s_lt_copy ( double,const Tensor&, cudaStream_t); //✨✨✨
 Tensor cuda_s_gt_copy ( double,const Tensor&, cudaStream_t); //✨✨✨
 
-Tensor cuda_eq_copy    (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_neq_copy   (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_leq_copy (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_geq_copy (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_lt_copy (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_gt_copy (const Tensor&, double, cudaStream_t); //✨✨✨
-Tensor cuda_s_leq_copy( double,const Tensor&, cudaStream_t); //✨✨✨
-Tensor cuda_s_geq_copy( double,const Tensor&, cudaStream_t); //✨✨✨
-Tensor cuda_s_lt_copy ( double,const Tensor&, cudaStream_t); //✨✨✨
-Tensor cuda_s_gt_copy ( double,const Tensor&, cudaStream_t); //✨✨✨
-
 // ---- helpers ----
 static inline bool is_integer_dtype(Dtype dt) {
     return dt == Dtype::Int16 || dt == Dtype::Int32 || dt == Dtype::Int64;
@@ -341,6 +330,7 @@ template Tensor operator+<float>(float, const Tensor&);
 template Tensor operator+<double>(double, const Tensor&);
 template Tensor operator+<float16_t>(float16_t, const Tensor&);
 template Tensor operator+<bfloat16_t>(bfloat16_t, const Tensor&);
+template Tensor operator+<bool>(bool, const Tensor&);
 
 template Tensor operator-<int16_t>(int16_t, const Tensor&);
 template Tensor operator-<int32_t>(int32_t, const Tensor&);

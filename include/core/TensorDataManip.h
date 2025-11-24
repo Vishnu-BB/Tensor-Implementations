@@ -6,6 +6,7 @@
 #include "core/Tensor.h"
 #include "dtype/Types.h"
 #include "device/DeviceTransfer.h" 
+#include "core/TensorDispatch.h"  // For dispatch_by_dtype
 #include <iostream>
 #include <cstring>
 #include <vector> // Required for temporary vector in specialization
@@ -48,19 +49,20 @@ namespace OwnTensor {
     template <typename T>
     inline void Tensor::fill(T value)
     {
-        if (sizeof(T) != dtype_size(dtype_))
-        {
-            throw std::runtime_error("Fill value type mismatch");
+        // ✅ STRICT TYPE CHECKING: Match behavior of set_data()
+        // Throw error if input type doesn't match tensor's dtype
+        if (!is_same_type<T>(dtype_)) {
+            throw std::runtime_error("Fill: Datatype mismatch - input type must match tensor dtype");
         }
 
-        // For fill operations, we handle device properly
         if (device_.is_cpu()) {
+            // Now safe to reinterpret_cast since we checked type match
             T* data = reinterpret_cast<T*>(data_ptr_.get());
             for (size_t i = 0; i < numel(); ++i) {
                 data[i] = value;
             }
         } else {
-            // For GPU, create a temporary CPU buffer and transfer
+            // For GPU, set_data will also check type (redundant but consistent)
             std::vector<T> temp_data(numel(), value);
             set_data(temp_data);
         }

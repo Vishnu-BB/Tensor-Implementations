@@ -26,6 +26,9 @@
 #include "ops/Kernels.h"
 // #include "ops/TensorOpUtils.h"
 
+// ConditionalOps.h
+#include "ops/helpers/ConditionalOps.h"
+
 // Reductions Utils
 
 
