@@ -75,7 +75,7 @@ void convert_to_bool_cuda(const T* input, bool* output, int64_t n, cudaStream_t 
         convert_to_bool_kernel<T><<<blocks, threads, 0, stream>>>(input, output, n);
     }
     
-    // ✅ Check launch errors
+    //  Check launch errors
     cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess) {
         throw std::runtime_error(
@@ -84,7 +84,7 @@ void convert_to_bool_cuda(const T* input, bool* output, int64_t n, cudaStream_t 
         );
     }
     
-    // ✅ ADD: Synchronize to ensure completion
+    //  ADD: Synchronize to ensure completion
     cudaError_t sync_err = cudaStreamSynchronize(stream);
     if (sync_err != cudaSuccess) {
         throw std::runtime_error(
@@ -108,3 +108,72 @@ template void convert_to_bool_cuda<float16_t>(const float16_t*, bool*, int64_t, 
 template void convert_to_bool_cuda<bfloat16_t>(const bfloat16_t*, bool*, int64_t, cudaStream_t);
 
 } // namespace OwnTensor
+
+// ============================================================================
+// Generic Type Conversion Kernel
+// ============================================================================
+namespace OwnTensor {
+
+template<typename Dst>
+__global__ void convert_type_kernel(const float* __restrict__ input,
+                                  Dst* __restrict__ output,
+                                  int64_t n) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        output[idx] = static_cast<Dst>(input[idx]);
+    }
+}
+
+// Specialization for float -> float16_t (using __half)
+template<>
+__global__ void convert_type_kernel<float16_t>(const float* __restrict__ input,
+                                                    float16_t* __restrict__ output,
+                                                    int64_t n) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        // Use CUDA intrinsic for conversion
+        __half h = __float2half(input[idx]);
+        // Store as raw bits
+        output[idx].raw_bits = *reinterpret_cast<uint16_t*>(&h);
+    }
+}
+
+// Specialization for float -> bfloat16_t (using __nv_bfloat16)
+template<>
+__global__ void convert_type_kernel<bfloat16_t>(const float* __restrict__ input,
+                                                     bfloat16_t* __restrict__ output,
+                                                     int64_t n) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        // Use CUDA intrinsic for conversion
+        __nv_bfloat16 b = __float2bfloat16(input[idx]);
+        // Store as raw bits
+        output[idx].raw_bits = *reinterpret_cast<uint16_t*>(&b);
+    }
+}
+
+template<typename Dst>
+void convert_type_cuda(const float* input, Dst* output, int64_t n, cudaStream_t stream) {
+    if (n == 0) return;
+    
+    int threads = 256;
+    int blocks = (n + threads - 1) / threads;
+    
+    convert_type_kernel<Dst><<<blocks, threads, 0, stream>>>(input, output, n);
+    
+    cudaError_t launch_err = cudaGetLastError();
+    if (launch_err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("convert_type_cuda kernel launch failed: ") + 
+            cudaGetErrorString(launch_err)
+        );
+    }
+}
+
+// Explicit instantiations
+// Did not work without the instantiations
+template void convert_type_cuda<float16_t>(const float*, float16_t*, int64_t, cudaStream_t);
+template void convert_type_cuda<bfloat16_t>(const float*, bfloat16_t*, int64_t, cudaStream_t);
+
+} // namespace OwnTensor
+
