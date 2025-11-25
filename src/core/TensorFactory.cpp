@@ -5,9 +5,9 @@
 
 using namespace OwnTensor;
 
-#ifdef WITH_CUDA
 #include <cuda_runtime.h>
 #include <curand.h>
+#include "ops/helpers/ConversionKernels.cuh"
 
 // Helper for CUDA RNG
 void cuda_rand_uniform(float* data, size_t count, unsigned long seed, cudaStream_t stream) {//✨✨✨
@@ -45,7 +45,7 @@ void cuda_rand_normal(double* data, size_t count, unsigned long seed, cudaStream
     curandGenerateNormalDouble(gen, data, count, 0.0, 1.0);
     curandDestroyGenerator(gen);
 }
-#endif
+
 
 Tensor Tensor::zeros(Shape shape, TensorOptions opts) {
     Tensor tensor(shape, opts);
@@ -159,6 +159,12 @@ Tensor Tensor::rand(Shape shape, TensorOptions opts) {
                 for (size_t i = 0; i < tensor.numel(); ++i) {
                     data[i] = dist(gen);
                 }
+            } else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>) {
+                std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                T* data = static_cast<T*>(tensor.data());
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    data[i] = static_cast<T>(dist(gen));
+                }
             } else {
                 throw std::runtime_error("rand only supports floating point types");
             }
@@ -173,11 +179,18 @@ Tensor Tensor::rand(Shape shape, TensorOptions opts) {
         dispatch_by_dtype(opts.dtype, [&](auto dummy) {
             using T = decltype(dummy);
             if constexpr (std::is_same_v<T, float>) {
-                cuda_rand_uniform(static_cast<float*>(tensor.data()), tensor.numel(), seed, stream);//✨✨✨
+                cuda_rand_uniform(static_cast<float*>(tensor.data()), tensor.numel(), seed, stream);
             } else if constexpr (std::is_same_v<T, double>) {
-                cuda_rand_uniform(static_cast<double*>(tensor.data()), tensor.numel(), seed, stream);//✨✨✨
+                cuda_rand_uniform(static_cast<double*>(tensor.data()), tensor.numel(), seed, stream);
+            } else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>) {
+                // 1. Allocate temporary float buffer on GPU
+                float* temp_data;
+                cudaMallocAsync(&temp_data, tensor.numel() * sizeof(float), stream);
+                cuda_rand_uniform(temp_data, tensor.numel(), seed, stream);
+                convert_type_cuda(temp_data, static_cast<T*>(tensor.data()), tensor.numel(), stream);
+                cudaFreeAsync(temp_data, stream);
             } else {
-                throw std::runtime_error("GPU rand only supports float/double");
+                throw std::runtime_error("GPU rand only supports float/double/half/bfloat16");
             }
         });
 #else
@@ -204,6 +217,12 @@ Tensor Tensor::randn(Shape shape, TensorOptions opts) {
                 for (size_t i = 0; i < tensor.numel(); ++i) {
                     data[i] = dist(gen);
                 }
+            } else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>) {
+                std::normal_distribution<float> dist(0.0f, 1.0f);
+                T* data = static_cast<T*>(tensor.data());
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    data[i] = static_cast<T>(dist(gen));
+                }
             } else {
                 throw std::runtime_error("randn only supports floating point types");
             }
@@ -221,6 +240,13 @@ Tensor Tensor::randn(Shape shape, TensorOptions opts) {
                 cuda_rand_normal(static_cast<float*>(tensor.data()), tensor.numel(), seed, stream);//✨✨✨
             } else if constexpr (std::is_same_v<T, double>) {
                 cuda_rand_normal(static_cast<double*>(tensor.data()), tensor.numel(), seed, stream);//✨✨✨
+            } else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>) {
+                // 1. Allocate temporary float buffer on GPU
+                float* temp_data;
+                cudaMallocAsync(&temp_data, tensor.numel() * sizeof(float), stream);
+                cuda_rand_normal(temp_data, tensor.numel(), seed, stream);
+                convert_type_cuda(temp_data, static_cast<T*>(tensor.data()), tensor.numel(), stream);
+                cudaFreeAsync(temp_data, stream);
             } else {
                 throw std::runtime_error("GPU randn only supports float/double");
             }
