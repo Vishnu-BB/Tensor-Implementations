@@ -524,17 +524,39 @@ void power_in_gpu_wrap(Tensor& input, int exponent, cudaStream_t stream) {
 }
 
 void power_in_gpu_wrap(Tensor& input, float exponent, cudaStream_t stream) {
-    throw std::runtime_error(
+    if (input.dtype() == Dtype::Bool) {
+        throw std::runtime_error(
+            "NotImplementedError: \"pow\" not implemented for 'Bool'"
+        );
+    }
+    if(is_float(input.dtype()))
+    {
+        power_in_gpu_wrap_impl(input, exponent, stream);
+    }
+    else{
+        throw std::runtime_error(
             "Inplace power operations is accepted only for int exponent values. "
             "Use out-of-place power operation instead."
         );
+    }  
 }
 
 void power_in_gpu_wrap(Tensor& input, double exponent, cudaStream_t stream) {
-    throw std::runtime_error(
+    if (input.dtype() == Dtype::Bool) {
+        throw std::runtime_error(
+            "NotImplementedError: \"pow\" not implemented for 'Bool'"
+        );
+    }
+    if(is_float(input.dtype()))
+    {
+        power_in_gpu_wrap_impl(input, exponent, stream);
+    }
+    else{
+        throw std::runtime_error(
             "Inplace power operations is accepted only for int exponent values. "
             "Use out-of-place power operation instead."
         );
+    }  
 }
 
 // ============================================================================

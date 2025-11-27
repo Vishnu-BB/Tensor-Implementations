@@ -144,21 +144,6 @@ namespace OwnTensor
             }
         }
 
-        // Element-wise where operation - must be in header (inline or template)
-        static Tensor where(const Tensor& condition, const Tensor& input, const Tensor& other);
-        
-        // Overload for scalar input
-        static Tensor where(const Tensor& condition, float input_scalar, const Tensor& other);
-        
-        // Overload for scalar other
-        static Tensor where(const Tensor& condition, const Tensor& input, float other_scalar);
-        
-        // Overload for both scalars
-        static Tensor where(const Tensor& condition, float input_scalar, float other_scalar);
-        
-        // Single argument version (returns indices where condition is true)
-        static std::vector<Tensor> where(const Tensor& condition);
-
         // ######################################################
         // Device Metadata
         //#######################################################
