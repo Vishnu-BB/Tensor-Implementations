@@ -3,8 +3,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include "ops/helpers/ConditionalOps.h"
 #include "core/TensorDispatch.h"
+#include "ops/helpers/ConditionalOps.h"
 #include "dtype/Types.h"
 
 namespace OwnTensor {
@@ -18,7 +18,7 @@ __global__ void k_where(const CondT* condition, const DataT* input,
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
          i < n; 
          i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0));
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i];
     }
 }
@@ -31,7 +31,7 @@ __global__ void k_where_fp16(const CondT* condition, const __half* input,
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
          i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0));
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i]; 
     }
 }
@@ -43,7 +43,7 @@ __global__ void k_where_bf16(const CondT* condition, const __nv_bfloat16* input,
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
          i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0));
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i]; 
     }
 }
@@ -159,7 +159,16 @@ void cuda_where_scalar_tensor(const Tensor& condition, T input_scalar,
         using scalar_t = decltype(dummy);
         const scalar_t* other_ptr = other.data<scalar_t>();
         scalar_t* out_ptr = out.data<scalar_t>();
-        scalar_t input_val = static_cast<scalar_t>(input_scalar);
+        
+        // Helper to convert scalar to target type (handles complex types)
+        scalar_t input_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t>) {
+            input_val = scalar_t(static_cast<float>(input_scalar), 0.0f);
+        } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
+            input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
+        } else {
+            input_val = static_cast<scalar_t>(input_scalar);
+        }
         
         k_where_scalar_tensor<<<grid, block>>>(cond_ptr, input_val, other_ptr, out_ptr, n);
     });
@@ -181,7 +190,16 @@ void cuda_where_tensor_scalar(const Tensor& condition, const Tensor& input,
         using scalar_t = decltype(dummy);
         const scalar_t* input_ptr = input.data<scalar_t>();
         scalar_t* out_ptr = out.data<scalar_t>();
-        scalar_t other_val = static_cast<scalar_t>(other_scalar);
+        
+        // Helper to convert scalar to target type (handles complex types)
+        scalar_t other_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t>) {
+            other_val = scalar_t(static_cast<float>(other_scalar), 0.0f);
+        } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
+            other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else {
+            other_val = static_cast<scalar_t>(other_scalar);
+        }
         
         k_where_tensor_scalar<<<grid, block>>>(cond_ptr, input_ptr, other_val, out_ptr, n);
     });
@@ -202,8 +220,19 @@ void cuda_where_scalar_scalar(const Tensor& condition, T input_scalar,
     dispatch_by_dtype(out.dtype(), [&](auto dummy) {
         using scalar_t = decltype(dummy);
         scalar_t* out_ptr = out.data<scalar_t>();
-        scalar_t input_val = static_cast<scalar_t>(input_scalar);
-        scalar_t other_val = static_cast<scalar_t>(other_scalar);
+        
+        // Helper to convert scalars to target type (handles complex types)
+        scalar_t input_val, other_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t>) {
+            input_val = scalar_t(static_cast<float>(input_scalar), 0.0f);
+            other_val = scalar_t(static_cast<float>(other_scalar), 0.0f);
+        } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
+            input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
+            other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else {
+            input_val = static_cast<scalar_t>(input_scalar);
+            other_val = static_cast<scalar_t>(other_scalar);
+        }
         
         k_where_scalar_scalar<<<grid, block>>>(cond_ptr, input_val, other_val, out_ptr, n);
     });
@@ -235,9 +264,9 @@ template void cuda_where_scalar_scalar<float, int>(const Tensor&, float, int, Te
 template void cuda_where_scalar_scalar<float, double>(const Tensor&, float, double, Tensor&);
 template void cuda_where_scalar_scalar<float, long>(const Tensor&, float, long, Tensor&);
 
-template void cuda_where_scalar_scalar<double,int>(const Tensor&,double,int,Tensor&);
-template void cuda_where_scalar_scalar<double,float>(const Tensor&,double,float,Tensor&);
-template void cuda_where_scalar_scalar<double,long>(const Tensor&,double,long,Tensor&);
+template void cuda_where_scalar_scalar<double, int>(const Tensor&, double, int, Tensor&);
+template void cuda_where_scalar_scalar<double, float>(const Tensor&, double, float, Tensor&);
+template void cuda_where_scalar_scalar<double, long>(const Tensor&, double, long, Tensor&);
 
 template void cuda_where_scalar_scalar<long, int>(const Tensor&, long, int, Tensor&);
 template void cuda_where_scalar_scalar<long, float>(const Tensor&, long, float, Tensor&);

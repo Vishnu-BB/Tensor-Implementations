@@ -6,6 +6,14 @@
 
 #include "ops/TensorOps.cuh"
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
+
+
+// Helper trait for complex types
+template <typename T> struct is_complex : std::false_type {};
+template <> struct is_complex<OwnTensor::complex32_t> : std::true_type {};
+template <> struct is_complex<OwnTensor::complex64_t> : std::true_type {};
+template <> struct is_complex<OwnTensor::complex128_t> : std::true_type {};
 
 namespace OwnTensor
 {   
@@ -16,7 +24,7 @@ __global__ void bool_lt_kernel(const T* a, const T* b, bool* output, size_t n)//
     if (idx < n)
     {
         // Placeholder operation: set output to true if a[idx] equals b[idx], else false
-        output[idx] = (a[idx] < b[idx]);
+        if constexpr (is_complex<T>::value) { output[idx] = false; } else { output[idx] = (a[idx] < b[idx]); }
     }
 }
 
@@ -79,7 +87,7 @@ __global__ void bool_lt_kernel_broadcast(const T* a, const T* b, bool* output,
         b_idx += coords[dim] * b_bcast_strides[dim];
     }
     
-    output[linear_idx] = a[a_idx] < b[b_idx];
+    if constexpr (is_complex<T>::value) { output[linear_idx] = false; } else { output[linear_idx] = a[a_idx] < b[b_idx]; }
 }
 
 

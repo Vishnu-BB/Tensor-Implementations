@@ -74,7 +74,13 @@ template<typename T> __device__ inline bool gpu_gt(T a, T b) { return a > b; }
 template<> __device__ inline bool gpu_gt(__half a, __half b) { return __hgt(a, b); }
 template<> __device__ inline bool gpu_gt(__nv_bfloat16 a, __nv_bfloat16 b) { return __hgt(a, b); }
 
-template<typename T> __device__ inline bool gpu_isnan(T val) { return isnan(val); }
+template<typename T> __device__ inline bool gpu_isnan(T val) { 
+    if constexpr (std::is_same_v<T, complex32_t> || std::is_same_v<T, complex64_t> || std::is_same_v<T, complex128_t>) {
+        return isnan(val);  // Use OwnTensor::isnan for complex types
+    } else {
+        return std::isnan(val);  // Use std::isnan for standard types
+    }
+}
 template<> __device__ inline bool gpu_isnan(__half val) { return __hisnan(val); }
 template<> __device__ inline bool gpu_isnan(__nv_bfloat16 val) { return __hisnan(val); }
 
@@ -127,19 +133,33 @@ struct ValueIndex {
     DEVICE_HOST ValueIndex(T val, int64_t idx) : value(val), index(idx) {}
 
     DEVICE_HOST bool operator>(const ValueIndex<T>& other) const {
-        #ifdef __CUDA_ARCH__
-        return gpu_gt(value, other.value);
-        #else
-        return value > other.value;
-        #endif
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<T, complex32_t> || 
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return false;  // Should never be called due to dispatcher checks
+        } else {
+            #ifdef __CUDA_ARCH__
+            return gpu_gt(value, other.value);
+            #else
+            return value > other.value;
+            #endif
+        }
     }
     
     DEVICE_HOST bool operator<(const ValueIndex<T>& other) const {
-        #ifdef __CUDA_ARCH__
-        return gpu_lt(value, other.value);
-        #else
-        return value < other.value;
-        #endif
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<T, complex32_t> || 
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return false;  // Should never be called due to dispatcher checks
+        } else {
+            #ifdef __CUDA_ARCH__
+            return gpu_lt(value, other.value);
+            #else
+            return value < other.value;
+            #endif
+        }
     }
 };
 
@@ -230,6 +250,7 @@ struct AccumulatorTypeSelector {
 template<> struct AccumulatorTypeSelector<int16_t> { using type = int64_t; };
 template<> struct AccumulatorTypeSelector<int32_t> { using type = int64_t; };
 template<> struct AccumulatorTypeSelector<int64_t> { using type = int64_t; };
+template<> struct AccumulatorTypeSelector<uint8_t> { using type = int64_t; };
 template<> struct AccumulatorTypeSelector<uint16_t> { using type = int64_t; };
 template<> struct AccumulatorTypeSelector<uint32_t> { using type = int64_t; };
 template<> struct AccumulatorTypeSelector<uint64_t> { using type = int64_t; };
@@ -257,7 +278,7 @@ struct SumOp {
     using AccT = AccumulatorType<T>;
     
     DEVICE_HOST AccT identity() const { 
-        return AccT(0); 
+        return AccT(0.0f); 
     }
    
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const { 
@@ -291,7 +312,7 @@ struct ProductOp {
     using AccT = AccumulatorType<T>;
     
     DEVICE_HOST AccT identity() const { 
-        return AccT(1); 
+        return AccT(1.0f); 
     }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const { 
@@ -334,21 +355,28 @@ struct MinOp {
     }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const { 
-        #ifdef __CUDA_ARCH__
-        // ✅ GPU: Use intrinsics
-        if constexpr (is_any_float_v<T>) {
-            if (gpu_isnan(a)) return a;
-            if (gpu_isnan(b)) return b;
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<AccT, complex32_t> || 
+                      std::is_same_v<AccT, complex64_t> ||
+                      std::is_same_v<AccT, complex128_t>) {
+            return a;  // Placeholder - should never be called
+        } else {
+            #ifdef __CUDA_ARCH__
+            // ✅ GPU: Use intrinsics
+            if constexpr (is_any_float_v<T>) {
+                if (gpu_isnan(a)) return a;
+                if (gpu_isnan(b)) return b;
+            }
+            return gpu_lt(a, b) ? a : b;
+            #else
+            // CPU path
+            if constexpr (is_any_float_v<T>) {
+                if (is_nan_check(a)) return a;
+                if (is_nan_check(b)) return b;
+            }
+            return (a < b) ? a : b;
+            #endif
         }
-        return gpu_lt(a, b) ? a : b;
-        #else
-        // CPU path
-        if constexpr (is_any_float_v<T>) {
-            if (is_nan_check(a)) return a;
-            if (is_nan_check(b)) return b;
-        }
-        return (a < b) ? a : b;
-        #endif
     }
 };
 
@@ -373,21 +401,28 @@ struct MaxOp {
     }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const {
-        #ifdef __CUDA_ARCH__
-        // ✅ GPU: Use intrinsics
-        if constexpr (is_any_float_v<T>) {
-            if (gpu_isnan(a)) return a;
-            if (gpu_isnan(b)) return b;
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<AccT, complex32_t> || 
+                      std::is_same_v<AccT, complex64_t> ||
+                      std::is_same_v<AccT, complex128_t>) {
+            return a;  // Placeholder - should never be called
+        } else {
+            #ifdef __CUDA_ARCH__
+            // ✅ GPU: Use intrinsics
+            if constexpr (is_any_float_v<T>) {
+                if (gpu_isnan(a)) return a;
+                if (gpu_isnan(b)) return b;
+            }
+            return gpu_gt(a, b) ? a : b;
+            #else
+            // CPU path
+            if constexpr (is_any_float_v<T>) {
+                if (is_nan_check(a)) return a;
+                if (is_nan_check(b)) return b;
+            }
+            return (a > b) ? a : b;
+            #endif
         }
-        return gpu_gt(a, b) ? a : b;
-        #else
-        // CPU path
-        if constexpr (is_any_float_v<T>) {
-            if (is_nan_check(a)) return a;
-            if (is_nan_check(b)) return b;
-        }
-        return (a > b) ? a : b;
-        #endif
     }
 };
 // ═══════════════════════════════════════════════════════════
@@ -400,10 +435,10 @@ struct VarianceOp {
     int64_t correction;  // Bessel's correction
     AccT mean_value;     // Pre-computed mean
     
-    DEVICE_HOST explicit VarianceOp(int64_t corr = 1, AccT mean = AccT(0)) 
+    DEVICE_HOST explicit VarianceOp(int64_t corr = 1, AccT mean = AccT(0.0f)) 
         : correction(corr), mean_value(mean) {}
     
-    DEVICE_HOST AccT identity() const { return AccT(0); }
+    DEVICE_HOST AccT identity() const { return AccT(0.0f); }
     
     DEVICE_HOST AccT reduce(const AccT& acc, const AccT& val) const {
         #ifdef __CUDA_ARCH__
@@ -433,7 +468,7 @@ template <typename T>
 struct NanSumOp {
     using AccT = AccumulatorType<T>;
     
-    DEVICE_HOST AccT identity() const { return AccT(0); }
+    DEVICE_HOST AccT identity() const { return AccT(0.0f); }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const {
         #ifdef __CUDA_ARCH__
@@ -456,7 +491,7 @@ template <typename T>
 struct NanProductOp {
     using AccT = AccumulatorType<T>;
     
-    DEVICE_HOST AccT identity() const { return AccT(1); }
+    DEVICE_HOST AccT identity() const { return AccT(1.0f); }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const {
         #ifdef __CUDA_ARCH__
@@ -496,19 +531,26 @@ struct NanMinOp {
     }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const {
-        #ifdef __CUDA_ARCH__
-        if constexpr (std::is_floating_point_v<AccT> || is_native_half_v<AccT>) {
-            if (gpu_isnan(a)) return b;
-            if (gpu_isnan(b)) return a;
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<AccT, complex32_t> || 
+                      std::is_same_v<AccT, complex64_t> ||
+                      std::is_same_v<AccT, complex128_t>) {
+            return a;  // Placeholder - should never be called
+        } else {
+            #ifdef __CUDA_ARCH__
+            if constexpr (std::is_floating_point_v<AccT> || is_native_half_v<AccT>) {
+                if (gpu_isnan(a)) return b;
+                if (gpu_isnan(b)) return a;
+            }
+            return gpu_lt(a, b) ? a : b;
+            #else
+            if constexpr (std::is_floating_point_v<AccT> || is_half_float_v<AccT>) {
+                if (is_nan_check(a)) return b;
+                if (is_nan_check(b)) return a;
+            }
+            return (a < b) ? a : b;
+            #endif
         }
-        return gpu_lt(a, b) ? a : b;
-        #else
-        if constexpr (std::is_floating_point_v<AccT> || is_half_float_v<AccT>) {
-            if (is_nan_check(a)) return b;
-            if (is_nan_check(b)) return a;
-        }
-        return (a < b) ? a : b;
-        #endif
     }
 };
 
@@ -533,19 +575,27 @@ struct NanMaxOp {
     }
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const {
-        #ifdef __CUDA_ARCH__
-        if constexpr (std::is_floating_point_v<AccT> || is_native_half_v<AccT>) {
-            if (gpu_isnan(a)) return b;
-            if (gpu_isnan(b)) return a;
+        // Complex types don't support ordering operations
+        if constexpr (std::is_same_v<AccT, complex32_t> || 
+                      std::is_same_v<AccT, complex64_t> ||
+                      std::is_same_v<AccT, complex128_t>) {
+            // This branch will never be reached but prevents compilation errors
+            return a;  // Placeholder - should never be called
+        } else {
+            #ifdef __CUDA_ARCH__
+            if constexpr (std::is_floating_point_v<AccT> || is_native_half_v<AccT>) {
+                if (gpu_isnan(a)) return b;
+                if (gpu_isnan(b)) return a;
+            }
+            return gpu_gt(a, b) ? a : b;
+            #else
+            if constexpr (std::is_floating_point_v<AccT> || is_half_float_v<AccT>) {
+                if (is_nan_check(a)) return b;
+                if (is_nan_check(b)) return a;
+            }
+            return (a > b) ? a : b;
+            #endif
         }
-        return gpu_gt(a, b) ? a : b;
-        #else
-        if constexpr (std::is_floating_point_v<AccT> || is_half_float_v<AccT>) {
-            if (is_nan_check(a)) return b;
-            if (is_nan_check(b)) return a;
-        }
-        return (a > b) ? a : b;
-        #endif
     }
 };// ═══════════════════════════════════════════════════════════
 // NaN-aware variance (IGNORES NaNs, doesn't propagate them)
@@ -557,10 +607,10 @@ struct NanVarianceOp {
     int64_t correction;
     AccT mean_value;
     
-    DEVICE_HOST explicit NanVarianceOp(int64_t corr = 1, AccT mean = AccT(0)) 
+    DEVICE_HOST explicit NanVarianceOp(int64_t corr = 1, AccT mean = AccT(0.0f)) 
         : correction(corr), mean_value(mean) {}
     
-    DEVICE_HOST AccT identity() const { return AccT(0); }
+    DEVICE_HOST AccT identity() const { return AccT(0.0f); }
     
     DEVICE_HOST AccT reduce(const AccT& acc, const AccT& val) const {
         #ifdef __CUDA_ARCH__
@@ -589,31 +639,38 @@ struct ArgMinOp {
     }
 
     DEVICE_HOST ValueIndex<T> reduce(const ValueIndex<T>& a, const ValueIndex<T>& b) const {
-        #ifdef __CUDA_ARCH__
-        if constexpr (is_any_float_v<T>) {
-            if (gpu_isnan(a.value)) return a;
-            if (gpu_isnan(b.value)) return b;
-        }
-        if (gpu_lt(a.value, b.value)) {
-            return a;
-        } else if (gpu_gt(a.value, b.value)) {
-            return b;
+        // Complex types are blocked at dispatcher level but prevent compilation
+        if constexpr (std::is_same_v<T, complex32_t> ||
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return a;  // Should never be called
         } else {
-            return (a.index < b.index) ? a : b;
+            #ifdef __CUDA_ARCH__
+            if constexpr (is_any_float_v<T>) {
+                if (gpu_isnan(a.value)) return a;
+                if (gpu_isnan(b.value)) return b;
+            }
+            if (gpu_lt(a.value, b.value)) {
+                return a;
+            } else if (gpu_gt(a.value, b.value)) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #else
+            if constexpr (is_any_float_v<T>) {
+                if (is_nan_check(a.value)) return a;
+                if (is_nan_check(b.value)) return b;
+            }
+            if (a.value < b.value) {
+                return a;
+            } else if (b.value < a.value) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #endif
         }
-        #else
-        if constexpr (is_any_float_v<T>) {
-            if (is_nan_check(a.value)) return a;
-            if (is_nan_check(b.value)) return b;
-        }
-        if (a.value < b.value) {
-            return a;
-        } else if (b.value < a.value) {
-            return b;
-        } else {
-            return (a.index < b.index) ? a : b;
-        }
-        #endif
     }
 };
 
@@ -626,31 +683,38 @@ struct ArgMaxOp {
     }
 
     DEVICE_HOST ValueIndex<T> reduce(const ValueIndex<T>& a, const ValueIndex<T>& b) const {
-        #ifdef __CUDA_ARCH__
-        if constexpr (is_any_float_v<T>) {
-            if (gpu_isnan(a.value)) return a;
-            if (gpu_isnan(b.value)) return b;
-        }
-        if (gpu_gt(a.value, b.value)) {
-            return a;
-        } else if (gpu_lt(a.value, b.value)) {
-            return b;
+        // Complex types are blocked at dispatcher level but prevent compilation
+        if constexpr (std::is_same_v<T, complex32_t> ||
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return a;  // Should never be called
         } else {
-            return (a.index < b.index) ? a : b;
+            #ifdef __CUDA_ARCH__
+            if constexpr (is_any_float_v<T>) {
+                if (gpu_isnan(a.value)) return a;
+                if (gpu_isnan(b.value)) return b;
+            }
+            if (gpu_gt(a.value, b.value)) {
+                return a;
+            } else if (gpu_lt(a.value, b.value)) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #else
+            if constexpr (is_any_float_v<T>) {
+                if (is_nan_check(a.value)) return a;
+                if (is_nan_check(b.value)) return b;
+            }
+            if (a.value > b.value) {
+                return a;
+            } else if (b.value > a.value) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #endif
         }
-        #else
-        if constexpr (is_any_float_v<T>) {
-            if (is_nan_check(a.value)) return a;
-            if (is_nan_check(b.value)) return b;
-        }
-        if (a.value > b.value) {
-            return a;
-        } else if (b.value > a.value) {
-            return b;
-        } else {
-            return (a.index < b.index) ? a : b;
-        }
-        #endif
     }
 };
 
@@ -663,35 +727,42 @@ struct NanArgMinOp {
     }
 
     DEVICE_HOST ValueIndex<T> reduce(const ValueIndex<T>& a, const ValueIndex<T>& b) const {
-        #ifdef __CUDA_ARCH__
-        const bool a_is_nan = gpu_isnan(a.value);
-        const bool b_is_nan = gpu_isnan(b.value);
-        if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
-        if (a_is_nan) return b;
-        if (b_is_nan) return a;
-        
-        if (gpu_lt(a.value, b.value)) {
-            return a;
-        } else if (gpu_gt(a.value, b.value)) {
-            return b;
+        // Complex types are blocked at dispatcher level but prevent compilation
+        if constexpr (std::is_same_v<T, complex32_t> ||
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return a;  // Should never be called
         } else {
-            return (a.index < b.index) ? a : b;
+            #ifdef __CUDA_ARCH__
+            const bool a_is_nan = gpu_isnan(a.value);
+            const bool b_is_nan = gpu_isnan(b.value);
+            if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
+            if (a_is_nan) return b;
+            if (b_is_nan) return a;
+            
+            if (gpu_lt(a.value, b.value)) {
+                return a;
+            } else if (gpu_gt(a.value, b.value)) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #else
+            const bool a_is_nan = is_nan_check(a.value);
+            const bool b_is_nan = is_nan_check(b.value);
+            if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
+            if (a_is_nan) return b;
+            if (b_is_nan) return a;
+            
+            if (a.value < b.value) {
+                return a;
+            } else if (b.value < a.value) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #endif
         }
-        #else
-        const bool a_is_nan = is_nan_check(a.value);
-        const bool b_is_nan = is_nan_check(b.value);
-        if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
-        if (a_is_nan) return b;
-        if (b_is_nan) return a;
-        
-        if (a.value < b.value) {
-            return a;
-        } else if (b.value < a.value) {
-            return b;
-        } else {
-            return (a.index < b.index) ? a : b;
-        }
-        #endif
     }
 };
 
@@ -704,35 +775,42 @@ struct NanArgMaxOp {
     }
 
     DEVICE_HOST ValueIndex<T> reduce(const ValueIndex<T>& a, const ValueIndex<T>& b) const {
-        #ifdef __CUDA_ARCH__
-        const bool a_is_nan = gpu_isnan(a.value);
-        const bool b_is_nan = gpu_isnan(b.value);
-        if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
-        if (a_is_nan) return b;
-        if (b_is_nan) return a;
-        
-        if (gpu_gt(a.value, b.value)) {
-            return a;
-        } else if (gpu_lt(a.value, b.value)) {
-            return b;
+        // Complex types are blocked at dispatcher level but prevent compilation
+        if constexpr (std::is_same_v<T, complex32_t> ||
+                      std::is_same_v<T, complex64_t> ||
+                      std::is_same_v<T, complex128_t>) {
+            return a;  // Should never be called
         } else {
-            return (a.index < b.index) ? a : b;
+            #ifdef __CUDA_ARCH__
+            const bool a_is_nan = gpu_isnan(a.value);
+            const bool b_is_nan = gpu_isnan(b.value);
+            if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
+            if (a_is_nan) return b;
+            if (b_is_nan) return a;
+            
+            if (gpu_gt(a.value, b.value)) {
+                return a;
+            } else if (gpu_lt(a.value, b.value)) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #else
+            const bool a_is_nan = is_nan_check(a.value);
+            const bool b_is_nan = is_nan_check(b.value);
+            if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
+            if (a_is_nan) return b;
+            if (b_is_nan) return a;
+            
+            if (a.value > b.value) {
+                return a;
+            } else if (b.value > a.value) {
+                return b;
+            } else {
+                return (a.index < b.index) ? a : b;
+            }
+            #endif
         }
-        #else
-        const bool a_is_nan = is_nan_check(a.value);
-        const bool b_is_nan = is_nan_check(b.value);
-        if (a_is_nan && b_is_nan) return (a.index < b.index) ? a : b;
-        if (a_is_nan) return b;
-        if (b_is_nan) return a;
-        
-        if (a.value > b.value) {
-            return a;
-        } else if (b.value > a.value) {
-            return b;
-        } else {
-            return (a.index < b.index) ? a : b;
-        }
-        #endif
     }
 };
 

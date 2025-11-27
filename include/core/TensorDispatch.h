@@ -6,8 +6,13 @@
 // ✅ CRITICAL: Include Dtype.h first for enum definition
 #include "dtype/Dtype.h"
 #include <stdexcept>
-#include <type_traits>
 #include <cstdint>
+
+#ifdef __CUDACC__
+    #include <cuda_fp16.h>
+    #include <cuda_bf16.h>
+#endif
+#include "dtype/Types.h"
 
 // ✅ Forward declare the Tensor class (avoid circular dependency)
 namespace OwnTensor {
@@ -22,10 +27,15 @@ namespace OwnTensor {
 template<Dtype dt> struct DtypeToType;
 
 // Integer types
+template<> struct DtypeToType<Dtype::Int8> { using type = int8_t; };
 template<> struct DtypeToType<Dtype::Int16>  { using type = int16_t; };
 template<> struct DtypeToType<Dtype::Int32>  { using type = int32_t; };
 template<> struct DtypeToType<Dtype::Int64>  { using type = int64_t; };
-
+//Unsigned Integer types
+template<> struct DtypeToType<Dtype::UInt8> { using type = uint8_t;};
+template<> struct DtypeToType<Dtype::UInt16> { using type = uint16_t;};
+template<> struct DtypeToType<Dtype::UInt32> { using type = uint32_t;};
+template<> struct DtypeToType<Dtype::UInt64> { using type = uint64_t;};
 // Standard floating point
 template<> struct DtypeToType<Dtype::Float32> { using type = float; };
 template<> struct DtypeToType<Dtype::Float64> { using type = double; };
@@ -35,16 +45,18 @@ template<> struct DtypeToType<Dtype::Bool> { using type = bool;};
 
 // ✅ Half precision types - resolve based on compilation context
 #ifdef __CUDACC__
-    // GPU compilation - use native CUDA types
-    #include <cuda_fp16.h>
-    #include <cuda_bf16.h>
     template<> struct DtypeToType<Dtype::Float16>  { using type = __half; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = __nv_bfloat16; };
+    template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
+    template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
+    template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
 #else
     // CPU compilation - use custom types
-    #include "dtype/Types.h"
     template<> struct DtypeToType<Dtype::Float16>  { using type = float16_t; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = bfloat16_t; };
+    template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
+    template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
+    template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
 #endif
 
 // ✅ Runtime dispatcher using the simple type resolver
@@ -59,6 +71,13 @@ static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
         case Dtype::Bfloat16: return f(typename DtypeToType<Dtype::Bfloat16>::type{});
         case Dtype::Float16:  return f(typename DtypeToType<Dtype::Float16>::type{});
         case Dtype::Bool:   return f(typename DtypeToType<Dtype::Bool>::type{});
+        case Dtype::UInt8: return f(typename DtypeToType<Dtype::UInt8>::type{});
+        case Dtype::UInt16: return f(typename DtypeToType<Dtype::UInt16>::type{});
+        case Dtype::UInt32: return f(typename DtypeToType<Dtype::UInt32>::type{});
+        case Dtype::UInt64: return f(typename DtypeToType<Dtype::UInt64>::type{});
+        case Dtype::Complex32: return f(typename DtypeToType<Dtype::Complex32>::type{});
+        case Dtype::Complex64: return f(typename DtypeToType<Dtype::Complex64>::type{});
+        case Dtype::Complex128: return f(typename DtypeToType<Dtype::Complex128>::type{});
         default:
             throw std::runtime_error("Unsupported Dtype");
     }

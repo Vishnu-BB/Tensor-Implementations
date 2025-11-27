@@ -4,13 +4,13 @@
 #define TENSOR_DATAMANIP_H
 
 #include "core/Tensor.h"
-#include "dtype/Types.h"
+//#include "dtype/Types.h"
 #include "device/DeviceTransfer.h" 
-#include "core/TensorDispatch.h"  // For dispatch_by_dtype
+//#include "core/TensorDispatch.h"  // For dispatch_by_dtype
 #include <iostream>
 #include <cstring>
 #include <vector> // Required for temporary vector in specialization
-#include "dtype/DtypeTraits.h" // For is_same_type
+//#include "dtype/DtypeTraits.h" // For is_same_type
 
 namespace OwnTensor {
 // Forward declaration for is_same_type
@@ -197,9 +197,10 @@ namespace OwnTensor {
         }
     }
 
+    
     // Specialization for fill with bool
     template<>
-    inline void Tensor::fill<bool>(bool value) {
+    void Tensor::fill<bool>(bool value) {
         if (dtype_ != Dtype::Bool) {
             throw std::runtime_error("Fill bool: dtype must be Bool");
         }

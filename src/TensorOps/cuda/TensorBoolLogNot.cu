@@ -5,6 +5,7 @@
 #include <cuda_bf16.h>
 
 #include "ops/TensorOps.cuh"
+#include "core/TensorDispatch.h"
 #include "core/Tensor.h"
 
 namespace OwnTensor
@@ -17,7 +18,7 @@ __global__ void bool_not_kernel(const T* a,  bool* output, size_t n)
     if (idx < n)
     {
         // ✅ Convert to bool: 0 → false, non-zero → true
-        bool a_bool = (a[idx] != T(0));
+        bool a_bool = (a[idx] != T(0.0f));
         //bool b_bool = (b[idx] != T(0));
         output[idx] = !a_bool;
     }

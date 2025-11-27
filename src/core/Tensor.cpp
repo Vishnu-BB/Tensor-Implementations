@@ -5,6 +5,9 @@
 #include "device/Device.h"
 #include "core/Views/ViewUtils.h"
 #include "ops/helpers/ConditionalOps.h"
+#include "dtype/DtypeTraits.h"
+#include "core/TensorDispatch.h"
+#include "core/TensorDataManip.h"
 #include <iostream>
 #include <cstring>
 
@@ -492,13 +495,21 @@ namespace OwnTensor
     size_t Tensor::dtype_size(Dtype d) {
         switch(d) {
             case Dtype::Bool: return 1;
+            case Dtype::Int8: return dtype_traits<Dtype::Int8>::size;
             case Dtype::Int16: return dtype_traits<Dtype::Int16>::size;
             case Dtype::Int32: return dtype_traits<Dtype::Int32>::size;
             case Dtype::Int64: return dtype_traits<Dtype::Int64>::size;
+            case Dtype::UInt8: return dtype_traits<Dtype::UInt8>::size;
+            case Dtype::UInt16: return dtype_traits<Dtype::UInt16>::size;
+            case Dtype::UInt32: return dtype_traits<Dtype::UInt32>::size;
+            case Dtype::UInt64: return dtype_traits<Dtype::UInt64>::size;
             case Dtype::Bfloat16: return dtype_traits<Dtype::Bfloat16>::size;
             case Dtype::Float16: return dtype_traits<Dtype::Float16>::size;
             case Dtype::Float32: return dtype_traits<Dtype::Float32>::size;
             case Dtype::Float64: return dtype_traits<Dtype::Float64>::size;
+            case Dtype::Complex32: return dtype_traits<Dtype::Complex32>::size;
+            case Dtype::Complex64: return dtype_traits<Dtype::Complex64>::size;
+            case Dtype::Complex128: return dtype_traits<Dtype::Complex128>::size;
             default: throw std::runtime_error("Unsupported data type");
         }
     }
@@ -559,7 +570,7 @@ Tensor Tensor::to_bool() const {
             
             #pragma omp parallel for
             for (size_t i = 0; i < this->numel(); ++i) {
-                dst[i] = (src[i] != T(0));
+                dst[i] = (src[i] != T(0.0f));
             }
         });
     }
@@ -590,6 +601,9 @@ Tensor Tensor::to_bool() const {
     // bool 
     template const bool* Tensor::data<bool>() const;
     template bool* Tensor::data<bool>();
+// int8_t (short)
+    template const int8_t* Tensor::data<int8_t>() const;
+    template int8_t* Tensor::data<int8_t>();
 
     // int16_t (short)
     template const short* Tensor::data<short>() const;
@@ -618,5 +632,61 @@ Tensor Tensor::to_bool() const {
 
     template const bfloat16_t* Tensor::data<bfloat16_t>() const;
     template bfloat16_t* Tensor::data<bfloat16_t>();
+// unsigned types 
+template const uint8_t* Tensor::data<uint8_t>() const;
+template uint8_t* Tensor::data<uint8_t>();
+
+template const uint16_t* Tensor::data<uint16_t>() const;
+template uint16_t* Tensor::data<uint16_t>();
+
+template const uint32_t* Tensor::data<uint32_t>() const;
+template uint32_t* Tensor::data<uint32_t>();
+
+template const uint64_t* Tensor::data<uint64_t>() const;
+template uint64_t* Tensor::data<uint64_t>();
+    // Complex types
+    template const complex32_t* Tensor::data<complex32_t>() const;
+    template complex32_t* Tensor::data<complex32_t>();
+    
+    template const complex64_t* Tensor::data<complex64_t>() const;
+    template complex64_t* Tensor::data<complex64_t>();
+    
+    template const complex128_t* Tensor::data<complex128_t>() const;
+    template complex128_t* Tensor::data<complex128_t>();
+
+    // Explicit instantiations for set_data
+    template void Tensor::set_data<bool>(const std::vector<bool>&);
+    template void Tensor::set_data<int8_t>(const std::vector<int8_t>&);
+    template void Tensor::set_data<int16_t>(const std::vector<int16_t>&);
+    template void Tensor::set_data<int32_t>(const std::vector<int32_t>&);
+    template void Tensor::set_data<int64_t>(const std::vector<int64_t>&);
+    template void Tensor::set_data<float>(const std::vector<float>&);
+    template void Tensor::set_data<double>(const std::vector<double>&);
+    template void Tensor::set_data<uint8_t>(const std::vector<uint8_t>&);
+    template void Tensor::set_data<uint16_t>(const std::vector<uint16_t>&);
+    template void Tensor::set_data<uint32_t>(const std::vector<uint32_t>&);
+    template void Tensor::set_data<uint64_t>(const std::vector<uint64_t>&);
+    template void Tensor::set_data<float16_t>(const std::vector<float16_t>&);
+    template void Tensor::set_data<bfloat16_t>(const std::vector<bfloat16_t>&);
+    template void Tensor::set_data<complex32_t>(const std::vector<complex32_t>&);
+    template void Tensor::set_data<complex64_t>(const std::vector<complex64_t>&);
+    template void Tensor::set_data<complex128_t>(const std::vector<complex128_t>&);
+
+    // Explicit instantiations for fill
+    template void Tensor::fill<bool>(bool);
+    template void Tensor::fill<int16_t>(int16_t);
+    template void Tensor::fill<int32_t>(int32_t);
+    template void Tensor::fill<int64_t>(int64_t);
+    template void Tensor::fill<uint8_t>(uint8_t);
+    template void Tensor::fill<uint16_t>(uint16_t);
+    template void Tensor::fill<uint32_t>(uint32_t);
+    template void Tensor::fill<uint64_t>(uint64_t);
+    template void Tensor::fill<float>(float);
+    template void Tensor::fill<double>(double);
+    template void Tensor::fill<float16_t>(float16_t);
+    template void Tensor::fill<bfloat16_t>(bfloat16_t);
+    template void Tensor::fill<complex32_t>(complex32_t);
+    template void Tensor::fill<complex64_t>(complex64_t);
+    template void Tensor::fill<complex128_t>(complex128_t);
 
 }

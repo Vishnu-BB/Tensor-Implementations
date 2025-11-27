@@ -166,6 +166,42 @@ void print_1d_half(std::ostream& os, const HalfT* ptr, size_t count, int precisi
     }
 }
 
+// Helper for complex types
+template <typename ComplexT>
+void print_1d_complex(std::ostream& os, const ComplexT* ptr, size_t count, int precision,
+                      const PrintOptions& opts) {
+    const bool summarize = (count > static_cast<size_t>(opts.edgeitems * 2 + 1));
+    const size_t head = summarize ? static_cast<size_t>(opts.edgeitems) : count;
+    const size_t tail = summarize ? static_cast<size_t>(opts.edgeitems) : 0;
+
+    auto print_val = [&](const ComplexT& val) {
+        std::ostringstream s;
+        s << std::fixed << std::setprecision(precision);
+        
+        // Convert to double for printing
+        double r = static_cast<double>(static_cast<float>(val.real()));
+        double i = static_cast<double>(static_cast<float>(val.imag()));
+        
+        s << r;
+        if (i >= 0) s << "+" << i << "j";
+        else s << i << "j"; 
+        os << s.str();
+    };
+
+    for (size_t i = 0; i < head; ++i) {
+        if (i) os << ", ";
+        print_val(ptr[i]);
+    }
+
+    if (summarize) {
+        os << ", ..., ";
+        for (size_t i = count - tail; i < count; ++i) {
+            if (i != count - tail) os << ", ";
+            print_val(ptr[i]);
+        }
+    }
+}
+
 // Dispatch to a concrete print implementation by dtype.
 // Expects a pointer to the start of the contiguous slice (CPU-accessible).
 void dispatch_print_1d(std::ostream& os, Dtype dt, const void* data, size_t count,
@@ -191,13 +227,18 @@ void dispatch_print_1d(std::ostream& os, Dtype dt, const void* data, size_t coun
             }
             return;
         }
+        case Dtype::Int8: return print_1d(os, static_cast<const int8_t*>(data),  count, precision, opts, /*force_float=*/false);
         case Dtype::Int16:   return print_1d(os, static_cast<const int16_t*>(data),  count, precision, opts, /*force_float=*/false);
         case Dtype::Int32:   return print_1d(os, static_cast<const int32_t*>(data),  count, precision, opts, /*force_float=*/false);
         case Dtype::Int64:   return print_1d(os, static_cast<const int64_t*>(data),  count, precision, opts, /*force_float=*/false);
+        case Dtype::UInt8: return print_1d(os, static_cast<const uint8_t*>(data),  count, precision, opts, /*force_float=*/false);
+        case Dtype::UInt16: return print_1d(os, static_cast<const uint16_t*>(data),  count, precision, opts, /*force_float=*/false);
+        case Dtype::UInt32: return print_1d(os, static_cast<const uint32_t*>(data),  count, precision, opts, /*force_float=*/false);
+        case Dtype::UInt64: return print_1d(os, static_cast<const uint64_t*>(data),  count, precision, opts, /*force_float=*/false);
 
         case Dtype::Float32: return print_1d(os, static_cast<const float*>(data),    count, precision, opts, /*force_float=*/true);
         case Dtype::Float64: return print_1d(os, static_cast<const double*>(data),   count, precision, opts, /*force_float=*/true);
-
+        
         case Dtype::Float16: {
             const auto* p = reinterpret_cast<const float16_t*>(data);
             auto to_float = [](float16_t h) -> float {
@@ -213,6 +254,10 @@ void dispatch_print_1d(std::ostream& os, Dtype dt, const void* data, size_t coun
             };
             return print_1d_half(os, p, count, precision, opts, to_float);
         }
+
+        case Dtype::Complex32: return print_1d_complex(os, static_cast<const complex32_t*>(data), count, precision, opts);
+        case Dtype::Complex64: return print_1d_complex(os, static_cast<const complex64_t*>(data), count, precision, opts);
+        case Dtype::Complex128: return print_1d_complex(os, static_cast<const complex128_t*>(data), count, precision, opts);
 
         default:
             os << "<unsupported dtype>";

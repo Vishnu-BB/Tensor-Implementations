@@ -62,7 +62,7 @@ template<typename T_In, typename T_Out>
 __global__ void sqrt_kernel_gpu(const T_In* in, T_Out* out, size_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        out[idx] = static_cast<T_Out>(sqrtf(static_cast<float>(in[idx])));
+        out[idx] = static_cast<T_Out>(::sqrtf(static_cast<float>(in[idx])));
     }
 }
 
@@ -70,7 +70,7 @@ template<>
 __global__ void sqrt_kernel_gpu<double, double>(const double* in, double* out, size_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        out[idx] = sqrt(in[idx]);
+        out[idx] = ::sqrt(in[idx]);
     }
 }
 
@@ -78,7 +78,7 @@ __global__ void sqrt_half_kernel(const __half* in, __half* out, size_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         float val = __half2float(in[idx]);
-        out[idx] = __float2half(sqrtf(val));
+        out[idx] = __float2half(::sqrtf(val));
     }
 }
 
@@ -86,7 +86,7 @@ __global__ void sqrt_bfloat16_kernel(const __nv_bfloat16* in, __nv_bfloat16* out
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         float val = __bfloat162float(in[idx]);
-        out[idx] = __float2bfloat16(sqrtf(val));
+        out[idx] = __float2bfloat16(::sqrtf(val));
     }
 }
 
@@ -251,7 +251,7 @@ template<>
 __global__ void abs_kernel_gpu<float>(const float* in, float* out, size_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        out[idx] = fabsf(in[idx]);
+        out[idx] = ::fabsf(in[idx]);
     }
 }
 
@@ -259,7 +259,7 @@ template<>
 __global__ void abs_kernel_gpu<double>(const double* in, double* out, size_t n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        out[idx] = fabs(in[idx]);
+        out[idx] = ::fabs(in[idx]);
     }
 }
 
@@ -274,7 +274,7 @@ __global__ void abs_bfloat16_kernel(const __nv_bfloat16* in, __nv_bfloat16* out,
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         float val = __bfloat162float(in[idx]);
-        out[idx] = __float2bfloat16(fabsf(val));
+        out[idx] = __float2bfloat16(::fabsf(val));
     }
 }
 

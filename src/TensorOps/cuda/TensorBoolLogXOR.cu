@@ -6,6 +6,7 @@
 
 #include "ops/TensorOps.cuh"
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
 
 namespace OwnTensor
 {   
@@ -17,8 +18,8 @@ __global__ void bool_xor_kernel(const T* a, const T* b, bool* output, size_t n)
     if (idx < n)
     {
         // ✅ Convert to bool: 0 → false, non-zero → true
-        bool a_bool = (a[idx] != T(0));
-        bool b_bool = (b[idx] != T(0));
+        bool a_bool = (a[idx] != T(0.0f));
+        bool b_bool = (b[idx] != T(0.0f));
         output[idx] = a_bool != b_bool;
     }
 }
@@ -91,8 +92,8 @@ __global__ void bool_xor_kernel_broadcast(const T* a, const T* b, bool* output,
     }
     
     // ✅ Convert to bool then apply logical AND
-    bool a_bool = (a[a_idx] != T(0));
-    bool b_bool = (b[b_idx] != T(0));
+    bool a_bool = (a[a_idx] != T(0.0f));
+    bool b_bool = (b[b_idx] != T(0.0f));
     output[linear_idx] = a_bool != b_bool;
 }
 

@@ -14,33 +14,33 @@ namespace OwnTensor {
 // ============================================================================
 // Device Function Pointers for GPU Trigonometric Operations
 // ============================================================================
-static inline __device__ float sinf_fn(float x) { return sinf(x); }
-static inline __device__ double sin_fn(double x) { return sin(x); }
-static inline __device__ float cosf_fn(float x) { return cosf(x); }
-static inline __device__ double cos_fn(double x) { return cos(x); }
-static inline __device__ float tanf_fn(float x) { return tanf(x); }
-static inline __device__ double tan_fn(double x) { return tan(x); }
+static inline __device__ float sinf_fn(float x) { return ::sinf(x); }
+static inline __device__ double sin_fn(double x) { return ::sin(x); }
+static inline __device__ float cosf_fn(float x) { return ::cosf(x); }
+static inline __device__ double cos_fn(double x) { return ::cos(x); }
+static inline __device__ float tanf_fn(float x) { return ::tanf(x); }
+static inline __device__ double tan_fn(double x) { return ::tan(x); }
 
-static inline __device__ float asinf_fn(float x) { return asinf(x); }
-static inline __device__ double asin_fn(double x) { return asin(x); }
-static inline __device__ float acosf_fn(float x) { return acosf(x); }
-static inline __device__ double acos_fn(double x) { return acos(x); }
-static inline __device__ float atanf_fn(float x) { return atanf(x); }
-static inline __device__ double atan_fn(double x) { return atan(x); }
+static inline __device__ float asinf_fn(float x) { return ::asinf(x); }
+static inline __device__ double asin_fn(double x) { return ::asin(x); }
+static inline __device__ float acosf_fn(float x) { return ::acosf(x); }
+static inline __device__ double acos_fn(double x) { return ::acos(x); }
+static inline __device__ float atanf_fn(float x) { return ::atanf(x); }
+static inline __device__ double atan_fn(double x) { return ::atan(x); }
 
-static inline __device__ float sinhf_fn(float x) { return sinhf(x); }
-static inline __device__ double sinh_fn(double x) { return sinh(x); }
-static inline __device__ float coshf_fn(float x) { return coshf(x); }
-static inline __device__ double cosh_fn(double x) { return cosh(x); }
-static inline __device__ float tanhf_fn(float x) { return tanhf(x); }
-static inline __device__ double tanh_fn(double x) { return tanh(x); }
+static inline __device__ float sinhf_fn(float x) { return ::sinhf(x); }
+static inline __device__ double sinh_fn(double x) { return ::sinh(x); }
+static inline __device__ float coshf_fn(float x) { return ::coshf(x); }
+static inline __device__ double cosh_fn(double x) { return ::cosh(x); }
+static inline __device__ float tanhf_fn(float x) { return ::tanhf(x); }
+static inline __device__ double tanh_fn(double x) { return ::tanh(x); }
 
-static inline __device__ float asinhf_fn(float x) { return asinhf(x); }
-static inline __device__ double asinh_fn(double x) { return asinh(x); }
-static inline __device__ float acoshf_fn(float x) { return acoshf(x); }
-static inline __device__ double acosh_fn(double x) { return acosh(x); }
-static inline __device__ float atanhf_fn(float x) { return atanhf(x); }
-static inline __device__ double atanh_fn(double x) { return atanh(x); }
+static inline __device__ float asinhf_fn(float x) { return ::asinhf(x); }
+static inline __device__ double asinh_fn(double x) { return ::asinh(x); }
+static inline __device__ float acoshf_fn(float x) { return ::acoshf(x); }
+static inline __device__ double acosh_fn(double x) { return ::acosh(x); }
+static inline __device__ float atanhf_fn(float x) { return ::atanhf(x); }
+static inline __device__ double atanh_fn(double x) { return ::atanh(x); }
 
 // ============================================================================
 // Generic CUDA Unary Kernel (for standard types) - REUSE FROM EXPONENTS
@@ -88,6 +88,10 @@ inline Dtype get_promoted_dtype_trig(Dtype input_dtype) {
         case Dtype::Int16:
         case Dtype::Int32:
         case Dtype::Bool:
+        case Dtype::UInt8:
+        case Dtype::UInt16:
+        case Dtype::UInt32:
+        case Dtype::UInt64:
             return Dtype::Float32;
         case Dtype::Int64:
             return Dtype::Float64;
@@ -106,7 +110,11 @@ static auto dispatch_gpu_dtype_trig(Dtype dtype, Func&& f) {
         case Dtype::Int16: return f(int16_t{});
         case Dtype::Int32: return f(int32_t{});
         case Dtype::Int64: return f(int64_t{});
-        case Dtype::Bool:return f(uint8_t{});
+        case Dtype::Bool: return f(bool{});
+        case Dtype::UInt8: return f(uint8_t{});
+        case Dtype::UInt16: return f(uint16_t{});
+        case Dtype::UInt32: return f(uint32_t{});
+        case Dtype::UInt64: return f(uint64_t{});
         // Floating point types
         case Dtype::Float32: return f(float{});
         case Dtype::Float64: return f(double{});

@@ -1,6 +1,7 @@
 #include <cmath>
 #include "core/Tensor.h"
 #include "dtype/Types.h"
+#include "dtype/DtypeTraits.h"
 #include "core/TensorDispatch.h"
 #include "ops/helpers/arith.hpp"
 #include "dtype/DtypeCastUtils.h"
@@ -13,10 +14,37 @@ namespace OwnTensor {
 
 template<typename T_In, typename T_Out, typename Func>
 void unary_kernel_cpu(const T_In* in, T_Out* out, size_t size, Func op) {
-    #pragma omp parallel for
-    for (size_t i = 0; i < size; ++i) {
-        out[i] = static_cast<T_Out>(op(static_cast<T_Out>(in[i])));
+    // Compile-time check: both must be complex or both must be non-complex
+    constexpr bool in_is_complex = 
+        std::is_same_v<T_In, complex32_t> ||
+        std::is_same_v<T_In, complex64_t> ||
+        std::is_same_v<T_In, complex128_t>;
+    
+    constexpr bool out_is_complex = 
+        std::is_same_v<T_Out, complex32_t> ||
+        std::is_same_v<T_Out, complex64_t> ||
+        std::is_same_v<T_Out, complex128_t>;
+
+    if constexpr (in_is_complex == out_is_complex) {
+        #pragma omp parallel for
+        for (size_t i = 0; i < size; ++i) {
+            if constexpr (in_is_complex) {
+                // Complex types: manual conversion if types differ
+                if constexpr (std::is_same_v<T_In, T_Out>) {
+                    // Same type - direct assignment
+                    out[i] = op(in[i]);
+                } else {
+                    // Different complex types - manual conversion
+                    T_Out converted_in(in[i].real(), in[i].imag());
+                    out[i] = op(converted_in);
+                }
+            } else {
+                // Non-complex types - use static_cast
+                out[i] = static_cast<T_Out>(op(static_cast<T_Out>(in[i])));
+            }
+        }
     }
+    // If types don't match (complex vs non-complex), this won't be instantiated
 }
 
 // ============================================================================
@@ -45,10 +73,17 @@ Tensor generic_unary_out_cpu(const Tensor& input_tensor, Dtype output_dtype,
             using T_Out = decltype(out_type_instance);
             T_Out* out_ptr = output.data<T_Out>();
             
-            if constexpr (std::is_same_v<T_Out, double>) {
-                unary_kernel_cpu(in_ptr, out_ptr, input_tensor.numel(), double_op);
-            } else {
-                unary_kernel_cpu(in_ptr, out_ptr, input_tensor.numel(), float_op);
+            constexpr bool is_complex = 
+                std::is_same_v<T_Out, complex32_t> ||
+                std::is_same_v<T_Out, complex64_t> ||
+                std::is_same_v<T_Out, complex128_t>;
+
+            if constexpr (!is_complex) {
+                if constexpr (std::is_same_v<T_Out, double>) {
+                    unary_kernel_cpu(in_ptr, out_ptr, input_tensor.numel(), double_op);
+                } else {
+                    unary_kernel_cpu(in_ptr, out_ptr, input_tensor.numel(), float_op);
+                }
             }
         });
     });
@@ -81,9 +116,18 @@ void generic_unary_in_cpu(Tensor& input_tensor, FloatFunc float_op, DoubleFunc d
                 ptr[i] = double_op(ptr[i]);
             }
         } else {
-            #pragma omp parallel for
-            for (size_t i = 0; i < size; ++i) {
-                ptr[i] = static_cast<T>(float_op(static_cast<float>(ptr[i])));
+            // Check if T is complex type
+            constexpr bool is_complex = 
+                std::is_same_v<T, complex32_t> ||
+                std::is_same_v<T, complex64_t> ||
+                std::is_same_v<T, complex128_t>;
+            
+            // Only apply float operations to non-complex types
+            if constexpr (!is_complex) {
+                #pragma omp parallel for
+                for (size_t i = 0; i < size; ++i) {
+                    ptr[i] = static_cast<T>(float_op(static_cast<float>(ptr[i])));
+                }
             }
         }
     });
@@ -94,9 +138,42 @@ void generic_unary_in_cpu(Tensor& input_tensor, FloatFunc float_op, DoubleFunc d
 // ============================================================================
 
 Tensor square_out_cpu_wrap(const Tensor& input_tensor) {
-    auto float_fn = [](float x) { return x * x; };
-    auto double_fn = [](double x) { return x * x; };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype_square(input_tensor.dtype()), float_fn, double_fn);
+    // Handle bf16/f16 by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = square_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = get_promoted_dtype_square(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            
+            // Square operation: x * x works for all types including complex!
+            auto square_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, bool>) {
+                    return val && val;
+                } else {
+                    return val * val;
+                }
+            };
+            
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                square_func
+            );
+        });
+    });
+    
+    return output;
 }
 
 void square_in_cpu_wrap(Tensor& input_tensor) {
@@ -106,13 +183,264 @@ void square_in_cpu_wrap(Tensor& input_tensor) {
 }
 
 // ============================================================================
+// POWER (int exponent)
+// ============================================================================
+Tensor power_out_cpu_wrap(const Tensor& input_tensor, int exponent) {
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            // Use std::pow which works for real and complex types
+            auto pow_func = [exponent](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::pow(static_cast<std::complex<float>>(val), exponent));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t>) {
+                    std::complex<float> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<float>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, complex128_t>) {
+                    std::complex<double> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<double>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(std::pow(static_cast<float>(val), exponent));
+                } else {
+                    return std::pow(val, exponent);
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                pow_func
+            );
+        });
+    });
+    return output;
+}
+
+// ============================================================================
+// POWER (float exponent)
+// ============================================================================
+Tensor power_out_cpu_wrap(const Tensor& input_tensor, float exponent) {
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto pow_func = [exponent](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::pow(static_cast<std::complex<float>>(val), exponent));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t>) {
+                    std::complex<float> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<std::complex<float>>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, complex128_t>) {
+                    std::complex<double> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<std::complex<double>>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(std::pow(static_cast<float>(val), exponent));
+                } else {
+                    return std::pow(val, static_cast<OutputType>(exponent));
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                pow_func
+            );
+        });
+    });
+    return output;
+}
+
+// ============================================================================
+// POWER (double exponent)
+// ============================================================================
+Tensor power_out_cpu_wrap(const Tensor& input_tensor, double exponent) {
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto pow_func = [exponent](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::pow(static_cast<std::complex<float>>(val), static_cast<float>(exponent)));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t>) {
+                    std::complex<float> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<std::complex<float>>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, complex128_t>) {
+                    std::complex<double> c_val(val.real(), val.imag());
+                    auto result = std::pow(c_val, static_cast<std::complex<double>>(exponent));
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(std::pow(static_cast<float>(val), exponent));
+                } else {
+                    return std::pow(val, static_cast<OutputType>(exponent));
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                pow_func
+            );
+        });
+    });
+    return output;
+}
+
+void power_in_cpu_wrap(Tensor& input_tensor, int exponent) {
+    if (input_tensor.dtype() == Dtype::Bool) {
+        throw std::runtime_error(
+            "NotImplementedError: \"pow\" not implemented for 'Bool'"
+        );
+    }
+    
+    if(exponent < 0) {
+        throw std::runtime_error(
+            "Inplace power operations with negative exponents are not supported. "
+            "Use out-of-place power operation instead."
+        );
+    }
+    auto float_fn = [exponent](float x) { 
+        return safe_pow(x, static_cast<float>(exponent)); 
+    };
+    auto double_fn = [exponent](double x) { 
+        return safe_pow(x, static_cast<double>(exponent)); 
+    };
+    generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+}
+
+void power_in_cpu_wrap( Tensor& input_tensor,float exponent) {
+    if (input_tensor.dtype() == Dtype::Bool) {
+        throw std::runtime_error(
+            "NotImplementedError: \"pow\" not implemented for 'Bool'"
+        );
+    }
+    if(is_float(input_tensor.dtype())){ 
+        auto float_fn = [exponent](float x) { 
+            return safe_pow(x, static_cast<float>(exponent)); 
+        };
+        auto double_fn = [exponent](double x) { 
+            return safe_pow(x, static_cast<double>(exponent)); 
+        };
+        generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+    } else {
+        throw std::runtime_error(
+            "Inplace power operations is accepted only for int exponent values. "
+            "Use out-of-place power operation instead."
+        );
+    }
+}
+
+void power_in_cpu_wrap(Tensor& input_tensor, double exponent) {
+    if (input_tensor.dtype() == Dtype::Bool) {
+        throw std::runtime_error(
+            "NotImplementedError: \"pow\" not implemented for 'Bool'"
+        );
+    }
+    if(is_float(input_tensor.dtype())){ 
+        auto float_fn = [exponent](float x) { 
+            return safe_pow(x, static_cast<float>(exponent)); 
+        };
+        auto double_fn = [exponent](double x) { 
+            return safe_pow(x, exponent); 
+        };
+        generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+    } else {
+        throw std::runtime_error(
+            "Inplace power operations is accepted only for int exponent values. "
+            "Use out-of-place power operation instead."
+        );
+    }
+}
+
+// ============================================================================
 // SQUARE ROOT
 // ============================================================================
 
 Tensor square_root_out_cpu_wrap(const Tensor& input_tensor) {
-    auto float_fn = [](float x) { return sqrtf(x); };
-    auto double_fn = [](double x) { return std::sqrt(x); };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), float_fn, double_fn);
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = square_root_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            // Use std::sqrt which works for real and complex types
+            auto sqrt_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::sqrt(static_cast<std::complex<float>>(val)));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t>) {
+                    std::complex<float> c_val(val.real(), val.imag());
+                    auto result = std::sqrt(c_val);
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, complex128_t>) {
+                    std::complex<double> c_val(val.real(), val.imag());
+                    auto result = std::sqrt(c_val);
+                    return OutputType(result.real(), result.imag());
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(std::sqrt(static_cast<float>(val)));
+                } else {
+                    return std::sqrt(val);
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                sqrt_func
+            );
+        });
+    });
+    return output;
 }
 
 void square_root_in_cpu_wrap(Tensor& input_tensor) {
@@ -129,9 +457,42 @@ void square_root_in_cpu_wrap(Tensor& input_tensor) {
 // ============================================================================
 
 Tensor reciprocal_out_cpu_wrap(const Tensor& input_tensor) {
-    auto float_fn = [](float x) { return 1.0f / x; };
-    auto double_fn = [](double x) { return 1.0 / x; };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), float_fn, double_fn);
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = reciprocal_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+
+    Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto recip_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::complex<float>(1.0f, 0.0f) / static_cast<std::complex<float>>(val));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t> || std::is_same_v<OutputType, complex128_t>) {
+                    return OutputType(1.0f) / val;
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(1.0f / static_cast<float>(val));
+                } else {
+                    return OutputType(1) / val;
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                recip_func
+            );
+        });
+    });
+    return output;
 }
 
 void reciprocal_in_cpu_wrap(Tensor& input_tensor) {
@@ -143,6 +504,24 @@ void reciprocal_in_cpu_wrap(Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Int16 || input_tensor.dtype() == Dtype::Int32 || input_tensor.dtype() == Dtype::Int64) {
         throw std::invalid_argument("In-place reciprocal requires floating point tensor");
     }
+    
+    // For complex types, we need to handle them explicitly if generic_unary_in_cpu skips them
+    if (is_complex(input_tensor.dtype())) {
+         dispatch_by_dtype(input_tensor.dtype(), [&](auto type_instance) {
+            using DataType = decltype(type_instance);
+            DataType* data_ptr = input_tensor.data<DataType>();
+            #pragma omp parallel for
+            for (size_t i = 0; i < input_tensor.numel(); ++i) {
+                if constexpr (std::is_same_v<DataType, complex32_t>) {
+                    data_ptr[i] = complex32_t(std::complex<float>(1.0f, 0.0f) / static_cast<std::complex<float>>(data_ptr[i]));
+                } else {
+                    data_ptr[i] = DataType(1.0f) / data_ptr[i];
+                }
+            }
+        });
+        return;
+    }
+
     auto float_fn = [](float x) { return 1.0f / x; };
     auto double_fn = [](double x) { return 1.0 / x; };
     generic_unary_in_cpu(input_tensor, float_fn, double_fn);
@@ -161,9 +540,40 @@ Tensor negator_out_cpu_wrap(const Tensor& input_tensor) {
         );
     }
     
-    auto float_fn = [](float x) { return -x; };
-    auto double_fn = [](double x) { return -x; };
-    return generic_unary_out_cpu(input_tensor, input_tensor.dtype(), float_fn, double_fn);
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = negator_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+
+    Dtype output_dtype = input_tensor.dtype();
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto neg_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(-val.real(), -val.imag());
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(-static_cast<float>(val));
+                } else {
+                    return -val;
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                neg_func
+            );
+        });
+    });
+    return output;
 }
 
 void negator_in_cpu_wrap(Tensor& input_tensor) {
@@ -173,6 +583,22 @@ void negator_in_cpu_wrap(Tensor& input_tensor) {
             "Negation, the `-` operator, on a bool tensor is not supported. "
             "If you are trying to invert a mask, use the `~` or `logical_not()` operator instead."
         );
+    }
+    
+    if (is_complex(input_tensor.dtype())) {
+         dispatch_by_dtype(input_tensor.dtype(), [&](auto type_instance) {
+            using DataType = decltype(type_instance);
+            DataType* data_ptr = input_tensor.data<DataType>();
+            #pragma omp parallel for
+            for (size_t i = 0; i < input_tensor.numel(); ++i) {
+                if constexpr (std::is_same_v<DataType, complex32_t>) {
+                    data_ptr[i] = complex32_t(-data_ptr[i].real(), -data_ptr[i].imag());
+                } else {
+                    data_ptr[i] = -data_ptr[i];
+                }
+            }
+        });
+        return;
     }
     
     auto float_fn = [](float x) { return -x; };
@@ -185,16 +611,50 @@ void negator_in_cpu_wrap(Tensor& input_tensor) {
 // ============================================================================
 
 Tensor absolute_out_cpu_wrap(const Tensor& input_tensor) {
-    // PyTorch behavior: abs() not implemented for Bool tensors
     if (input_tensor.dtype() == Dtype::Bool) {
         throw std::runtime_error(
             "NotImplementedError: \"abs_cpu\" not implemented for 'Bool'"
         );
     }
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = absolute_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
     
-    auto float_fn = [](float x) { return fabsf(x); };
-    auto double_fn = [](double x) { return std::fabs(x); };
-    return generic_unary_out_cpu(input_tensor, input_tensor.dtype(), float_fn, double_fn);
+    Dtype output_dtype = input_tensor.dtype();
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto abs_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_unsigned_v<OutputType>) {
+                    return val;
+                } else if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    return complex32_t(std::abs(static_cast<std::complex<float>>(val)));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t> || std::is_same_v<OutputType, complex128_t>) {
+                    // Use unqualified abs() for custom complex types
+                    return OutputType(abs(val));
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    return static_cast<OutputType>(std::abs(static_cast<float>(val)));
+                } else {
+                    return std::abs(val);
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                abs_func
+            );
+        });
+    });
+    return output;
 }
 
 void absolute_in_cpu_wrap(Tensor& input_tensor) {
@@ -215,9 +675,52 @@ void absolute_in_cpu_wrap(Tensor& input_tensor) {
 // ============================================================================
 
 Tensor sign_out_cpu_wrap(const Tensor& input_tensor) {
-    auto float_fn = [](float x) { return (x > 0.0f) ? 1.0f : ((x < 0.0f) ? -1.0f : 0.0f); };
-    auto double_fn = [](double x) { return (x > 0.0) ? 1.0 : ((x < 0.0) ? -1.0 : 0.0); };
-    return generic_unary_out_cpu(input_tensor, input_tensor.dtype(), float_fn, double_fn);
+    // Handle half types by promoting to float32
+    if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
+        Tensor temp = convert_half_to_float32(input_tensor);
+        Tensor result_f32 = sign_out_cpu_wrap(temp);
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        convert_float32_to_half(result_f32, result);
+        return result;
+    }
+    
+    Dtype output_dtype = input_tensor.dtype();
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    
+    dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
+        using InputType = decltype(in_type_instance);
+        dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
+            using OutputType = decltype(out_type_instance);
+            auto sign_func = [](OutputType val) -> OutputType {
+                if constexpr (std::is_same_v<OutputType, complex32_t>) {
+                    if (val.real() == 0 && val.imag() == 0) return OutputType(0.0f, 0.0f);
+                    std::complex<float> c_val = static_cast<std::complex<float>>(val);
+                    return complex32_t(c_val / std::abs(c_val));
+                } else if constexpr (std::is_same_v<OutputType, complex64_t> || std::is_same_v<OutputType, complex128_t>) {
+                    if (val == OutputType(0.0f)) return OutputType(0.0f);
+                    // Use unqualified abs() to find OwnTensor::abs via ADL
+                    auto magnitude = abs(val); 
+                    return val / OutputType(magnitude, decltype(magnitude)(0.0f));
+                } else if constexpr (std::is_same_v<OutputType, bfloat16_t> || std::is_same_v<OutputType, float16_t>) {
+                    float f_val = static_cast<float>(val);
+                    if (f_val > 0) return static_cast<OutputType>(1);
+                    if (f_val < 0) return static_cast<OutputType>(-1);
+                    return static_cast<OutputType>(0);
+                } else {
+                    if (val > static_cast<OutputType>(0)) return static_cast<OutputType>(1);
+                    if (val < static_cast<OutputType>(0)) return static_cast<OutputType>(-1);
+                    return static_cast<OutputType>(0);
+                }
+            };
+            unary_kernel_cpu<InputType, OutputType>(
+                input_tensor.data<InputType>(),
+                output.data<OutputType>(),
+                input_tensor.numel(),
+                sign_func
+            );
+        });
+    });
+    return output;
 }
 
 void sign_in_cpu_wrap(Tensor& input_tensor) {

@@ -22,7 +22,7 @@ __global__ void convert_to_bool_kernel(const T* __restrict__ input,
     int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < n) {
-        output[idx] = (input[idx] != T(0));
+        output[idx] = (input[idx] != T(0.0f));
     }
 }
 
@@ -106,6 +106,13 @@ template void convert_to_bool_cuda<float>(const float*, bool*, int64_t, cudaStre
 template void convert_to_bool_cuda<double>(const double*, bool*, int64_t, cudaStream_t);
 template void convert_to_bool_cuda<float16_t>(const float16_t*, bool*, int64_t, cudaStream_t);
 template void convert_to_bool_cuda<bfloat16_t>(const bfloat16_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<uint8_t>(const uint8_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<uint16_t>(const uint16_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<uint32_t>(const uint32_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<uint64_t>(const uint64_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<complex32_t>(const complex32_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<complex64_t>(const complex64_t*, bool*, int64_t, cudaStream_t);
+template void convert_to_bool_cuda<complex128_t>(const complex128_t*, bool*, int64_t, cudaStream_t);
 
 } // namespace OwnTensor
 

@@ -29,6 +29,21 @@ inline uint16_t store_f32_to_u16(float v, Dtype dt) {
 template <typename T>
 inline double ld(const T* p, size_t i, Dtype) { return static_cast<double>(p[i]); }
 
+// Specializations for complex types (can't convert complex to double)
+template <>
+inline double ld<complex32_t>(const complex32_t*, size_t, Dtype) {
+   throw std::runtime_error("Cannot perform scalar operations on complex32 types");
+}
+
+template <>
+inline double ld<complex64_t>(const complex64_t*, size_t, Dtype) {
+    throw std::runtime_error("Cannot perform scalar operations on complex64 types");
+}
+
+template <>
+inline double ld<complex128_t>(const complex128_t*, size_t, Dtype) {
+    throw std::runtime_error("Cannot perform scalar operations on complex128 types");
+}
 
 template <>
 inline double ld<uint16_t>(const uint16_t* p, size_t i, Dtype dt) {
@@ -86,7 +101,7 @@ inline void apply_div_cross_type(const SrcT* src, DstT* dst, size_t n, Dtype src
 
 } // anon
 
-// --------- Arithmetic ops (unchanged) ---------
+
 // --------- Arithmetic ops (unchanged) ---------
 void cpu_add_inplace(Tensor& t, double s) {
     const Dtype dt = t.dtype();
@@ -212,9 +227,11 @@ Tensor cpu_div_copy_scalar_tensor(double s, const Tensor& a) {
     // Check for division by zero in integer tensors
     if (is_integer_dtype(input_dt)) {
         dispatch_by_dtype(input_dt, [&](auto d){ using T = decltype(d);
-            const T* p = a.data<T>();
-            for (size_t i = 0, n = a.numel(); i < n; ++i)
-                if (p[i] == (T)0) throw std::runtime_error("Division by zero");
+            if constexpr (std::is_integral_v<T>) {
+                const T* p = a.data<T>();
+                for (size_t i = 0, n = a.numel(); i < n; ++i)
+                    if (p[i] == (T)0) throw std::runtime_error("Division by zero");
+            }
         });
     }
     

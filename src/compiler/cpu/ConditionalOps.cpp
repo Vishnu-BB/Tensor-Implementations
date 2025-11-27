@@ -58,7 +58,7 @@ void cpu_where(const Tensor& condition, const Tensor& input,
                 if (input_dim_idx < input_ndim && input_shape[input_dim_idx] > 1) {
                     input_bcast_strides[i] = input_strides[input_dim_idx];
                 }
-                if (other_dim_idx < other_ndim && other_shape[other_dim_idx] > 1) {
+                if (other_dim_idxtensors, but operations won't support, will make this too once completing f8,f4 < other_ndim && other_shape[other_dim_idx] > 1) {
                     other_bcast_strides[i] = other_strides[other_dim_idx];
                 }
             }
