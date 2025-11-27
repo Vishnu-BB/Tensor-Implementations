@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
 #include <stdexcept>
 #include <vector>
 

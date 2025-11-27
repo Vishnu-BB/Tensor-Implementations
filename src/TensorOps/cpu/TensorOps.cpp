@@ -428,7 +428,16 @@ Tensor operator<=(const Tensor& lhs, const Tensor& rhs)
     else 
     {
         apply_binary_op_bool(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a <= b;
+            using T = decltype(a);
+            constexpr bool is_complex = 
+                std::is_same_v<T, complex32_t> ||
+                std::is_same_v<T, complex64_t> ||
+                std::is_same_v<T, complex128_t>;
+            if constexpr (is_complex) {
+                return false; // Complex numbers are not ordered
+            } else {
+                return a <= b;
+            }
         });
     }
     return output;
@@ -459,7 +468,16 @@ Tensor operator>=(const Tensor& lhs, const Tensor& rhs)
     else 
     {
         apply_binary_op_bool(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a >= b;
+            using T = decltype(a);
+            constexpr bool is_complex = 
+                std::is_same_v<T, complex32_t> ||
+                std::is_same_v<T, complex64_t> ||
+                std::is_same_v<T, complex128_t>;
+            if constexpr (is_complex) {
+                return false; // Complex numbers are not ordered
+            } else {
+                return a >= b;
+            }
         });
     }
     return output;
@@ -490,7 +508,16 @@ Tensor operator>(const Tensor& lhs, const Tensor& rhs)
     else 
     {
         apply_binary_op_bool(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a > b;
+            using T = decltype(a);
+            constexpr bool is_complex = 
+                std::is_same_v<T, complex32_t> ||
+                std::is_same_v<T, complex64_t> ||
+                std::is_same_v<T, complex128_t>;
+            if constexpr (is_complex) {
+                return false; // Complex numbers are not ordered
+            } else {
+                return a > b;
+            }
         });
     }
     return output;
@@ -521,7 +548,16 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
     else 
     {
         apply_binary_op_bool(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a < b;
+            using T = decltype(a);
+            constexpr bool is_complex = 
+                std::is_same_v<T, complex32_t> ||
+                std::is_same_v<T, complex64_t> ||
+                std::is_same_v<T, complex128_t>;
+            if constexpr (is_complex) {
+                return false; // Complex numbers are not ordered
+            } else {
+                return a < b;
+            }
         });
     }
     return output;
@@ -548,7 +584,11 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         else 
         {
         apply_binary_op_bool(lhs, rhs, output, [](auto a, auto b) {
-            return a && b;  // This lambda gets passed as 'op'
+            using T1 = decltype(a);
+            using T2 = decltype(b);
+            bool a_bool = (a != T1(0.0f));
+            bool b_bool = (b != T2(0.0f));
+            return a_bool && b_bool;
         });
         }
         return output;
@@ -576,7 +616,11 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         else 
         {
         apply_binary_op_bool(lhs, rhs, output, [](auto a, auto b) {
-            return a || b;  // This lambda gets passed as 'op'
+            using T1 = decltype(a);
+            using T2 = decltype(b);
+            bool a_bool = (a != T1(0.0f));
+            bool b_bool = (b != T2(0.0f));
+            return a_bool || b_bool;
         });
         }
         return output;
@@ -606,8 +650,10 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         // ✅ FIXED: Convert to bool first, then XOR
         apply_binary_op_bool(lhs, rhs, output, [](auto a, auto b) {
             // Convert to boolean (non-zero = true), then XOR
-            bool a_bool = (a != decltype(a)(0));
-            bool b_bool = (b != decltype(b)(0));
+            using T1 = decltype(a);
+            using T2 = decltype(b);
+            bool a_bool = (a != T1(0.0f));
+            bool b_bool = (b != T2(0.0f));
             return a_bool != b_bool;  // XOR is "not equal" of boolean values
         });
     }
@@ -631,7 +677,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         else 
         {
         apply_not_bool(lhs, output, [](auto a) {
-            return !a ;  // This lambda gets passed as 'op'
+            using T = decltype(a);
+            return !(a != T(0.0f));
         });
         }
         return output;

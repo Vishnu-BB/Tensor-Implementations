@@ -3,9 +3,11 @@
 #include "ops/helpers/GenMatmulUtils.h"
 #include <stdexcept>
 #include <vector>
-#include <algorithm>
-#include <driver_types.h>//✨✨✨
-#include "device/DeviceCore.h"//✨✨✨
+#include <algorithm> // Keep algorithm as it's used by std::max
+
+#include <iostream> // Keep iostream as std::cout is used
+#include <driver_types.h>
+#include "device/DeviceCore.h"
 #ifdef WITH_CUDA
 #include "ops/Matmul.cuh"
 #endif

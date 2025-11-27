@@ -1,74 +1,307 @@
 // tensor_kernels/cpu/ConditionalOps.cpp
 #include "core/Tensor.h"
 #include "dtype/Types.h"
+#include "core/TensorDispatch.h"
 #include <cstddef>
+#include <vector>
 
 namespace OwnTensor {
 
-namespace {
-    // Helper: check if condition is true (nonzero)
-    template<typename CondT>
-    inline bool is_true(const CondT* ptr, size_t idx) {
-        return ptr[idx] != static_cast<CondT>(0);
-    }
-
-    // Generic where implementation
-    template<typename CondT, typename DataT>
-    void apply_where_cpu(const CondT* cond, const DataT* input,
-                         const DataT* other, DataT* out, size_t n) {
-        for (size_t i = 0; i < n; ++i) {
-            out[i] = is_true(cond, i) ? input[i] : other[i];
-        }
-    }
-}
-
 void cpu_where(const Tensor& condition, const Tensor& input,
                const Tensor& other, Tensor& out) {
-    const size_t n = condition.numel();
-    const Dtype cond_dtype = condition.dtype();
-    const Dtype data_dtype = input.dtype();
+    const auto& cond_shape = condition.shape().dims;
+    const auto& input_shape = input.shape().dims;
+    const auto& other_shape = other.shape().dims;
+    const auto& out_shape = out.shape().dims;
     
-    // Dispatch on condition type
-    if (cond_dtype == Dtype::Int32) {
-        const int32_t* cond_ptr = condition.data<int32_t>();
+    const auto& cond_strides = condition.stride().strides;
+    const auto& input_strides = input.stride().strides;
+    const auto& other_strides = other.stride().strides;
+    
+    size_t out_ndim = out_shape.size();
+    size_t total_elems = out.numel();
+    
+    // Check if all tensors have the same shape (fast path, no broadcasting)
+    bool same_shape = (cond_shape == input_shape) && (input_shape == other_shape) && (other_shape == out_shape);
+    
+    dispatch_by_dtype(input.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const bool* cond_ptr = condition.data<bool>();
+        const scalar_t* input_ptr = input.data<scalar_t>();
+        const scalar_t* other_ptr = other.data<scalar_t>();
+        scalar_t* out_ptr = out.data<scalar_t>();
         
-        // Dispatch on data type
-        if (data_dtype == Dtype::Float32) {
-            apply_where_cpu(cond_ptr, input.data<float>(),
-                           other.data<float>(), out.data<float>(), n);
-        } else if (data_dtype == Dtype::Float64) {
-            apply_where_cpu(cond_ptr, input.data<double>(),
-                           other.data<double>(), out.data<double>(), n);
-        } else if (data_dtype == Dtype::Int32) {
-            apply_where_cpu(cond_ptr, input.data<int32_t>(),
-                           other.data<int32_t>(), out.data<int32_t>(), n);
-        } else if (data_dtype == Dtype::Int64) {
-            apply_where_cpu(cond_ptr, input.data<int64_t>(),
-                           other.data<int64_t>(), out.data<int64_t>(), n);
+        if (same_shape) {
+            // Fast path: all same shape, direct element-wise operation
+            for (size_t i = 0; i < total_elems; ++i) {
+                out_ptr[i] = cond_ptr[i] ? input_ptr[i] : other_ptr[i];
+            }
         } else {
-            throw std::runtime_error("cpu_where: unsupported data dtype");
+            // Broadcasting path: calculate broadcast strides
+            std::vector<size_t> cond_bcast_strides(out_ndim, 0);
+            std::vector<size_t> input_bcast_strides(out_ndim, 0);
+            std::vector<size_t> other_bcast_strides(out_ndim, 0);
+            
+            size_t cond_ndim = cond_shape.size();
+            size_t input_ndim = input_shape.size();
+            size_t other_ndim = other_shape.size();
+            
+            // Calculate broadcast strides for each tensor
+            for (size_t i = 0; i < out_ndim; ++i) {
+                size_t cond_dim_idx = cond_ndim - out_ndim + i;
+                size_t input_dim_idx = input_ndim - out_ndim + i;
+                size_t other_dim_idx = other_ndim - out_ndim + i;
+                
+                if (cond_dim_idx < cond_ndim && cond_shape[cond_dim_idx] > 1) {
+                    cond_bcast_strides[i] = cond_strides[cond_dim_idx];
+                }
+                if (input_dim_idx < input_ndim && input_shape[input_dim_idx] > 1) {
+                    input_bcast_strides[i] = input_strides[input_dim_idx];
+                }
+                if (other_dim_idx < other_ndim && other_shape[other_dim_idx] > 1) {
+                    other_bcast_strides[i] = other_strides[other_dim_idx];
+                }
+            }
+            
+            // Iterate over output elements
+            std::vector<size_t> coords(out_ndim, 0);
+            
+            for (size_t linear_idx = 0; linear_idx < total_elems; ++linear_idx) {
+                // Calculate coordinates
+                size_t temp_idx = linear_idx;
+                for (int dim = out_ndim - 1; dim >= 0; --dim) {
+                    coords[dim] = temp_idx % out_shape[dim];
+                    temp_idx /= out_shape[dim];
+                }
+                
+                // Calculate input indices using broadcast strides
+                size_t cond_idx = 0;
+                size_t input_idx = 0;
+                size_t other_idx = 0;
+                
+                for (size_t dim = 0; dim < out_ndim; ++dim) {
+                    cond_idx += coords[dim] * cond_bcast_strides[dim];
+                    input_idx += coords[dim] * input_bcast_strides[dim];
+                    other_idx += coords[dim] * other_bcast_strides[dim];
+                }
+                
+                out_ptr[linear_idx] = cond_ptr[cond_idx] ? input_ptr[input_idx] : other_ptr[other_idx];
+            }
         }
-    } else if (cond_dtype == Dtype::Int64) {
-        const int64_t* cond_ptr = condition.data<int64_t>();
-        
-        if (data_dtype == Dtype::Float32) {
-            apply_where_cpu(cond_ptr, input.data<float>(),
-                           other.data<float>(), out.data<float>(), n);
-        } else if (data_dtype == Dtype::Float64) {
-            apply_where_cpu(cond_ptr, input.data<double>(),
-                           other.data<double>(), out.data<double>(), n);
-        } else if (data_dtype == Dtype::Int32) {
-            apply_where_cpu(cond_ptr, input.data<int32_t>(),
-                           other.data<int32_t>(), out.data<int32_t>(), n);
-        } else if (data_dtype == Dtype::Int64) {
-            apply_where_cpu(cond_ptr, input.data<int64_t>(),
-                           other.data<int64_t>(), out.data<int64_t>(), n);
-        } else {
-            throw std::runtime_error("cpu_where: unsupported data dtype");
-        }
-    } else {
-        throw std::runtime_error("cpu_where: condition must be Int32 or Int64");
-    }
+    });
 }
 
+// ============================================================================
+// SCALAR BACKEND VARIANTS - Avoid tensor allocation for scalars
+// ============================================================================
+
+// Variant 1: Scalar input, Tensor other
+template<typename T>
+void cpu_where_scalar_tensor(const Tensor& condition, T input_scalar, 
+                              const Tensor& other, Tensor& out) {
+    const auto& cond_shape = condition.shape().dims;
+    const auto& other_shape = other.shape().dims;
+    const auto& out_shape = out.shape().dims;
+    
+    const auto& cond_strides = condition.stride().strides;
+    const auto& other_strides = other.stride().strides;
+    
+    size_t out_ndim = out_shape.size();
+    size_t total_elems = out.numel();
+    
+    bool same_shape = (cond_shape == other_shape) && (other_shape == out_shape);
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const bool* cond_ptr = condition.data<bool>();
+        const scalar_t* other_ptr = other.data<scalar_t>();
+        scalar_t* out_ptr = out.data<scalar_t>();
+        // Avoid ambiguity with complex types when casting from long
+        scalar_t input_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t> || std::is_same_v<scalar_t, complex128_t>) {
+            input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
+        } else {
+            input_val = static_cast<scalar_t>(input_scalar);
+        }
+        
+        if (same_shape) {
+            for (size_t i = 0; i < total_elems; ++i) {
+                out_ptr[i] = cond_ptr[i] ? input_val : other_ptr[i];
+            }
+        } else {
+            // Broadcasting
+            std::vector<size_t> cond_bcast_strides(out_ndim, 0);
+            std::vector<size_t> other_bcast_strides(out_ndim, 0);
+            
+            size_t cond_ndim = cond_shape.size();
+            size_t other_ndim = other_shape.size();
+            
+            for (size_t i = 0; i < out_ndim; ++i) {
+                size_t cond_dim_idx = cond_ndim - out_ndim + i;
+                size_t other_dim_idx = other_ndim - out_ndim + i;
+                
+                if (cond_dim_idx < cond_ndim && cond_shape[cond_dim_idx] > 1) {
+                    cond_bcast_strides[i] = cond_strides[cond_dim_idx];
+                }
+                if (other_dim_idx < other_ndim && other_shape[other_dim_idx] > 1) {
+                    other_bcast_strides[i] = other_strides[other_dim_idx];
+                }
+            }
+            
+            std::vector<size_t> coords(out_ndim, 0);
+            
+            for (size_t linear_idx = 0; linear_idx < total_elems; ++linear_idx) {
+                size_t temp_idx = linear_idx;
+                for (int dim = out_ndim - 1; dim >= 0; --dim) {
+                    coords[dim] = temp_idx % out_shape[dim];
+                    temp_idx /= out_shape[dim];
+                }
+                
+                size_t cond_idx = 0;
+                size_t other_idx = 0;
+                
+                for (size_t dim = 0; dim < out_ndim; ++dim) {
+                    cond_idx += coords[dim] * cond_bcast_strides[dim];
+                    other_idx += coords[dim] * other_bcast_strides[dim];
+                }
+                
+                out_ptr[linear_idx] = cond_ptr[cond_idx] ? input_val : other_ptr[other_idx];
+            }
+        }
+    });
+}
+
+// Variant 2: Tensor input, Scalar other
+template<typename T>
+void cpu_where_tensor_scalar(const Tensor& condition, const Tensor& input, 
+                              T other_scalar, Tensor& out) {
+    const auto& cond_shape = condition.shape().dims;
+    const auto& input_shape = input.shape().dims;
+    const auto& out_shape = out.shape().dims;
+    
+    const auto& cond_strides = condition.stride().strides;
+    const auto& input_strides = input.stride().strides;
+    
+    size_t out_ndim = out_shape.size();
+    size_t total_elems = out.numel();
+    
+    bool same_shape = (cond_shape == input_shape) && (input_shape == out_shape);
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const bool* cond_ptr = condition.data<bool>();
+        const scalar_t* input_ptr = input.data<scalar_t>();
+        scalar_t* out_ptr = out.data<scalar_t>();
+        // Handle complex types specially to avoid constructor ambiguity  
+        scalar_t other_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t> || std::is_same_v<scalar_t, complex128_t>) {
+            other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else {
+            other_val = static_cast<scalar_t>(other_scalar);
+        }
+        
+        if (same_shape) {
+            for (size_t i = 0; i < total_elems; ++i) {
+                out_ptr[i] = cond_ptr[i] ? input_ptr[i] : other_val;
+            }
+        } else {
+            // Broadcasting
+            std::vector<size_t> cond_bcast_strides(out_ndim, 0);
+            std::vector<size_t> input_bcast_strides(out_ndim, 0);
+            
+            size_t cond_ndim = cond_shape.size();
+            size_t input_ndim = input_shape.size();
+            
+            for (size_t i = 0; i < out_ndim; ++i) {
+                size_t cond_dim_idx = cond_ndim - out_ndim + i;
+                size_t input_dim_idx = input_ndim - out_ndim + i;
+                
+                if (cond_dim_idx < cond_ndim && cond_shape[cond_dim_idx] > 1) {
+                    cond_bcast_strides[i] = cond_strides[cond_dim_idx];
+                }
+                if (input_dim_idx < input_ndim && input_shape[input_dim_idx] > 1) {
+                    input_bcast_strides[i] = input_strides[input_dim_idx];
+                }
+            }
+            
+            std::vector<size_t> coords(out_ndim, 0);
+            
+            for (size_t linear_idx = 0; linear_idx < total_elems; ++linear_idx) {
+                size_t temp_idx = linear_idx;
+                for (int dim = out_ndim - 1; dim >= 0; --dim) {
+                    coords[dim] = temp_idx % out_shape[dim];
+                    temp_idx /= out_shape[dim];
+                }
+                
+                size_t cond_idx = 0;
+                size_t input_idx = 0;
+                
+                for (size_t dim = 0; dim < out_ndim; ++dim) {
+                    cond_idx += coords[dim] * cond_bcast_strides[dim];
+                    input_idx += coords[dim] * input_bcast_strides[dim];
+                }
+                
+                out_ptr[linear_idx] = cond_ptr[cond_idx] ? input_ptr[input_idx] : other_val;
+            }
+        }
+    });
+}
+
+// Variant 3: Both scalars
+template<typename T, typename U>
+void cpu_where_scalar_scalar(const Tensor& condition, T input_scalar, 
+                              U other_scalar, Tensor& out) {
+    size_t total_elems = out.numel();
+    
+    dispatch_by_dtype(out.dtype(), [&](auto dummy) {
+        using scalar_t = decltype(dummy);
+        const bool* cond_ptr = condition.data<bool>();
+        scalar_t* out_ptr = out.data<scalar_t>();
+        // Handle complex types specially to avoid constructor ambiguity
+        scalar_t input_val, other_val;
+        if constexpr (std::is_same_v<scalar_t, complex32_t> || std::is_same_v<scalar_t, complex64_t> || std::is_same_v<scalar_t, complex128_t>) {
+            input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
+            other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else {
+            input_val = static_cast<scalar_t>(input_scalar);
+            other_val = static_cast<scalar_t>(other_scalar);
+        }
+        
+        for (size_t i = 0; i < total_elems; ++i) {
+            out_ptr[i] = cond_ptr[i] ? input_val : other_val;
+        }
+    });
+}
+
+// Explicit instantiations for common types
+template void cpu_where_scalar_tensor<int>(const Tensor&, int, const Tensor&, Tensor&);
+template void cpu_where_scalar_tensor<float>(const Tensor&, float, const Tensor&, Tensor&);
+template void cpu_where_scalar_tensor<double>(const Tensor&, double, const Tensor&, Tensor&);
+template void cpu_where_scalar_tensor<long>(const Tensor&, long, const Tensor&, Tensor&);
+
+template void cpu_where_tensor_scalar<int>(const Tensor&, const Tensor&, int, Tensor&);
+template void cpu_where_tensor_scalar<float>(const Tensor&, const Tensor&, float, Tensor&);
+template void cpu_where_tensor_scalar<double>(const Tensor&, const Tensor&, double, Tensor&);
+template void cpu_where_tensor_scalar<long>(const Tensor&, const Tensor&, long, Tensor&);
+
+template void cpu_where_scalar_scalar<int, int>(const Tensor&, int, int, Tensor&);
+template void cpu_where_scalar_scalar<float, float>(const Tensor&, float, float, Tensor&);
+template void cpu_where_scalar_scalar<double, double>(const Tensor&, double, double, Tensor&);
+template void cpu_where_scalar_scalar<long, long>(const Tensor&, long, long, Tensor&);
+
+template void cpu_where_scalar_scalar<int, float>(const Tensor&, int, float, Tensor&);
+template void cpu_where_scalar_scalar<int, double>(const Tensor&, int, double, Tensor&);
+template void cpu_where_scalar_scalar<int, long>(const Tensor&, int, long, Tensor&);
+
+template void cpu_where_scalar_scalar<float, int>(const Tensor&, float, int, Tensor&);
+template void cpu_where_scalar_scalar<float, double>(const Tensor&, float, double, Tensor&);
+template void cpu_where_scalar_scalar<float, long>(const Tensor&, float, long, Tensor&);
+
+template void cpu_where_scalar_scalar<double,int>(const Tensor&  , double,int , Tensor&);
+template void cpu_where_scalar_scalar<double,float>(const Tensor&, double,float, Tensor&);
+template void cpu_where_scalar_scalar<double,long>(const Tensor&, double,long, Tensor&);
+
+template void cpu_where_scalar_scalar<long,int>(const Tensor&,long,int,Tensor&);
+template void cpu_where_scalar_scalar<long,float>(const Tensor&,long,float,Tensor&);
+template void cpu_where_scalar_scalar<long,double>(const Tensor&,long,double,Tensor&);
 } // namespace OwnTensor

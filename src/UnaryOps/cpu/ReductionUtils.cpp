@@ -1,10 +1,11 @@
-#include "ops/helpers/ReductionUtils.h" // Provides declarations for all functions
-#include "core/Tensor.h"          // Provides OwnTensor::Shape (required for calculate_output_shape return type)
 #include <algorithm> //For std::find
 #include <numeric>   // For std::accumulate, std::multiplies
 #include <set>       // For unique axes
 #include <stdexcept> // For runtime_error
 #include <cstdint>   // For int64_t and size_t
+
+#include "ops/helpers/ReductionUtils.h" // Provides declarations for all functions
+#include "core/Tensor.h"          // Provides OwnTensor::Shape (required for calculate_output_shape return type)
 
 namespace OwnTensor {
 namespace detail {

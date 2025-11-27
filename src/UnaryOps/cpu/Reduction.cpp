@@ -152,6 +152,18 @@ Tensor reduce_nanmean(const Tensor& input, const std::vector<int64_t>& axes, boo
 Tensor reduce_argmin(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim, cudaStream_t stream) {
      std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     
+    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis argmin is fundamentally broken)
+    // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
+    if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
+        throw std::runtime_error(
+            "reduce_argmin: Multiple axes not supported for partial reductions. "
+            "argmin can only reduce over a single dimension at a time. "
+            "Got " + std::to_string(normalized_axes.size()) + " axes for "
+            + std::to_string(input.shape().dims.size()) + "D tensor. "
+            "For partial multi-axis reduction, apply argmin sequentially over individual axes."
+        );
+    }
+    
     return dispatch_by_dtype(input.dtype(), [&](auto T_val) -> Tensor {
         using T = decltype(T_val);
         return detail::dispatch_reduction<T, ArgMinOp>(input, normalized_axes, keepdim, stream);
@@ -160,6 +172,18 @@ Tensor reduce_argmin(const Tensor& input, const std::vector<int64_t>& axes, bool
 
 Tensor reduce_argmax(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim, cudaStream_t stream) {
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
+    
+    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis argmax is fundamentally broken)
+    // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
+    if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
+        throw std::runtime_error(
+            "reduce_argmax: Multiple axes not supported for partial reductions. "
+            "argmax can only reduce over a single dimension at a time . "
+            "Got " + std::to_string(normalized_axes.size()) + " axes for "
+            + std::to_string(input.shape().dims.size()) + "D tensor. "
+            "For partial multi-axis reduction, apply argmax sequentially over individual axes."
+        );
+    }
     
     return dispatch_by_dtype(input.dtype(), [&](auto T_val) -> Tensor {
         using T = decltype(T_val);
@@ -180,6 +204,18 @@ Tensor reduce_nanargmin(const Tensor& input, const std::vector<int64_t>& axes, b
     }
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     
+    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis nanargmin is fundamentally broken)
+    // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
+    if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
+        throw std::runtime_error(
+            "reduce_nanargmin: Multiple axes not supported for partial reductions. "
+            "nanargmin can only reduce over a single dimension at a time . "
+            "Got " + std::to_string(normalized_axes.size()) + " axes for "
+            + std::to_string(input.shape().dims.size()) + "D tensor. "
+            "For partial multi-axis reduction, apply nanargmin sequentially over individual axes."
+        );
+    }
+    
     return dispatch_by_dtype(input.dtype(), [&](auto T_val) -> Tensor {
         using T = decltype(T_val);
         return detail::dispatch_reduction<T, NanArgMinOp>(input, normalized_axes, keepdim, stream);
@@ -195,6 +231,18 @@ Tensor reduce_nanargmax(const Tensor& input, const std::vector<int64_t>& axes, b
         );
     }
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
+
+    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis nanargmax is fundamentally broken)
+    // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
+    if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
+        throw std::runtime_error(
+            "reduce_nanargmax: Multiple axes not supported for partial reductions. "
+            "nanargmax can only reduce over a single dimension at a time. "
+            "Got " + std::to_string(normalized_axes.size()) + " axes for "
+            + std::to_string(input.shape().dims.size()) + "D tensor. "
+            "For partial multi-axis reduction, apply nanargmax sequentially over individual axes."
+        );
+    }
 
     return dispatch_by_dtype(input.dtype(), [&](auto T_val) -> Tensor {
         using T = decltype(T_val);

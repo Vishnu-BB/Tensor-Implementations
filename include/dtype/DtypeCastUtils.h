@@ -4,15 +4,23 @@
 
 namespace OwnTensor {
 
-// Integer promotion policy
+// Integer promotion 
 inline constexpr Dtype get_promoted_dtype(Dtype input_dtype) {
     switch (input_dtype) {
         case Dtype::Int16:
         case Dtype::Int32:
         case Dtype::Bool:
+        case Dtype::UInt8:
+        case Dtype::UInt16:
+        case Dtype::UInt32:
             return Dtype::Float32;
         case Dtype::Int64:
+        case Dtype::UInt64:
             return Dtype::Float64;
+        case Dtype::Complex32:
+        case Dtype::Complex64:
+        case Dtype::Complex128:
+            return input_dtype; // No promotion for complex types
         default:
             return input_dtype; // no promotion for float types
     }
@@ -73,7 +81,15 @@ inline Dtype get_promoted_dtype_square(Dtype input_dtype) {
         case Dtype::Int32:
         case Dtype::Int64:
         case Dtype::Bool:
+        case Dtype::UInt8:
+        case Dtype::UInt16:
+        case Dtype::UInt32:
+        case Dtype::UInt64:
             return Dtype::Float64;
+        case Dtype::Complex32:
+        case Dtype::Complex64:
+        case Dtype::Complex128:
+            return input_dtype; // Squaring complex keeps it complex
         default:
             return input_dtype;
     }
@@ -116,5 +132,29 @@ inline T safe_pow(T base, ExpT exponent) {
     }
     
     return result;
+}
+
+// Convert Complex32 tensor to Complex64 (CPU path)
+inline Tensor convert_complex32_to_complex64(const Tensor& input) {
+    Tensor temp(input.shape(), Dtype::Complex64, input.device(), input.requires_grad());
+    complex64_t* temp_ptr = temp.data<complex64_t>();
+    const complex32_t* in_ptr = input.data<complex32_t>();
+    
+    for (size_t i = 0; i < input.numel(); ++i) {
+        // std::complex cast works if underlying types are convertible
+        temp_ptr[i] = static_cast<complex64_t>(in_ptr[i]);
+    }
+    return temp;
+}
+
+// Convert Complex64 tensor to Complex32 (CPU path)
+inline void convert_complex64_to_complex32(const Tensor& input, Tensor& output) {
+    const complex64_t* in_ptr = input.data<complex64_t>();
+    complex32_t* out_ptr = output.data<complex32_t>();
+    
+    for (size_t i = 0; i < input.numel(); ++i) {
+        // Explicit cast for downcasting
+        out_ptr[i] = static_cast<complex32_t>(in_ptr[i]);
+    }
 }
 } // namespace OwnTensor

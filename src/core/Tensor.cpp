@@ -5,6 +5,9 @@
 #include "device/Device.h"
 #include "core/Views/ViewUtils.h"
 #include "ops/helpers/ConditionalOps.h"
+#include "dtype/DtypeTraits.h"
+#include "core/TensorDispatch.h"
+#include "core/TensorDataManip.h"
 #include <iostream>
 #include <cstring>
 
@@ -492,13 +495,21 @@ namespace OwnTensor
     size_t Tensor::dtype_size(Dtype d) {
         switch(d) {
             case Dtype::Bool: return 1;
+            case Dtype::Int8: return dtype_traits<Dtype::Int8>::size;
             case Dtype::Int16: return dtype_traits<Dtype::Int16>::size;
             case Dtype::Int32: return dtype_traits<Dtype::Int32>::size;
             case Dtype::Int64: return dtype_traits<Dtype::Int64>::size;
+            case Dtype::UInt8: return dtype_traits<Dtype::UInt8>::size;
+            case Dtype::UInt16: return dtype_traits<Dtype::UInt16>::size;
+            case Dtype::UInt32: return dtype_traits<Dtype::UInt32>::size;
+            case Dtype::UInt64: return dtype_traits<Dtype::UInt64>::size;
             case Dtype::Bfloat16: return dtype_traits<Dtype::Bfloat16>::size;
             case Dtype::Float16: return dtype_traits<Dtype::Float16>::size;
             case Dtype::Float32: return dtype_traits<Dtype::Float32>::size;
             case Dtype::Float64: return dtype_traits<Dtype::Float64>::size;
+            case Dtype::Complex32: return dtype_traits<Dtype::Complex32>::size;
+            case Dtype::Complex64: return dtype_traits<Dtype::Complex64>::size;
+            case Dtype::Complex128: return dtype_traits<Dtype::Complex128>::size;
             default: throw std::runtime_error("Unsupported data type");
         }
     }
@@ -546,25 +557,25 @@ namespace OwnTensor
     }
 
     // Simple type promotion for where operation
-    static Dtype promote_dtypes_internal(Dtype a, Dtype b) {
-        if (a == b) return a;
+    // static Dtype promote_dtypes_internal(Dtype a, Dtype b) {
+    //     if (a == b) return a;
         
-        // Promotion hierarchy: Float64 > Float32 > Int64 > Int32 > Int16
-        auto rank = [](Dtype d) -> int {
-            switch(d) {
-                case Dtype::Float64: return 5;
-                case Dtype::Float32: return 4;
-                case Dtype::Int64: return 3;
-                case Dtype::Int32: return 2;
-                case Dtype::Int16: return 1;
-                case Dtype::Float16: return 4;
-                case Dtype::Bfloat16: return 4;
-                default: return 0;
-            }
-        };
+    //     // Promotion hierarchy: Float64 > Float32 > Int64 > Int32 > Int16
+    //     auto rank = [](Dtype d) -> int {
+    //         switch(d) {
+    //             case Dtype::Float64: return 5;
+    //             case Dtype::Float32: return 4;
+    //             case Dtype::Int64: return 3;
+    //             case Dtype::Int32: return 2;
+    //             case Dtype::Int16: return 1;
+    //             case Dtype::Float16: return 4;
+    //             case Dtype::Bfloat16: return 4;
+    //             default: return 0;
+    //         }
+    //     };
         
-        return (rank(a) > rank(b)) ? a : b;
-    }
+    //     return (rank(a) > rank(b)) ? a : b;
+    // }
 Tensor Tensor::to_bool() const {
     Tensor result({this->shape()}, TensorOptions()
         .with_dtype(Dtype::Bool)
@@ -579,7 +590,7 @@ Tensor Tensor::to_bool() const {
             
             #pragma omp parallel for
             for (size_t i = 0; i < this->numel(); ++i) {
-                dst[i] = (src[i] != T(0));
+                dst[i] = (src[i] != T(0.0f));
             }
         });
     }
@@ -607,112 +618,170 @@ Tensor Tensor::to_bool() const {
     return result;
 }
     // Simple shape broadcasting check (for now, require exact match)
-    static bool shapes_match(const Shape& a, const Shape& b) {
-        if (a.dims.size() != b.dims.size()) return false;
-        for (size_t i = 0; i < a.dims.size(); ++i) {
-            if (a.dims[i] != b.dims[i]) return false;
-        }
-        return true;
-    }
+    // static bool shapes_match(const Shape& a, const Shape& b) {
+    //     if (a.dims.size() != b.dims.size()) return false;
+    //     for (size_t i = 0; i < a.dims.size(); ++i) {
+    //         if (a.dims[i] != b.dims[i]) return false;
+    //     }
+    //     return true;
+    // }
 
     // ============================================================================
     // WHERE Implementation
     // ============================================================================
 
     // Main where implementation - simplified version without broadcasting
-    Tensor Tensor::where(const Tensor& condition, const Tensor& input, const Tensor& other) {
-    // Validate condition dtype
-        if (condition.dtype_ != Dtype::Int32 && condition.dtype_ != Dtype::Int64 ) {
-            throw std::invalid_argument("Condition must be Int32 or Int64 dtype");
-        }
+    // Tensor Tensor::where(const Tensor& condition, const Tensor& input, const Tensor& other) {
+    // // Validate condition dtype
+    //     if (condition.dtype_ != Dtype::Bool ) {
+    //         throw std::invalid_argument("Condition Tesnor must be Bool dtype ");
+    //     }
         
-        // Validate same device
-        if (condition.device_.device != input.device_.device || 
-            input.device_.device != other.device_.device) {
-            throw std::invalid_argument("All tensors must be on same device");
-        }
+    //     // Validate same device
+    //     if (condition.device_.device != input.device_.device || 
+    //         input.device_.device != other.device_.device) {
+    //         throw std::invalid_argument("All tensors must be on same device");
+    //     }
+
+    //     // //broadcasting
+    //     // bool needs_broadcasting_input = (condition.shape().dims != input.shape().dims);
+    //     // if(needs_broadcasting_input)
+    //     // {
+
+    //     // }
+
+    //     // bool needs_broadcasting_other = (condition.shape().dims != other.shape().dims);
+    //     // if(needs_broadcasting_other)
+    //     // {
+
+    //     // }
         
-        // Validate same shape
-        if (!shapes_match(condition.shape_, input.shape_) || 
-            !shapes_match(input.shape_, other.shape_)) {
-            throw std::invalid_argument("All tensors must have same shape");
-        }
+    //     // Validate same shape
+    //     if (!shapes_match(condition.shape_, input.shape_) || 
+    //         !shapes_match(input.shape_, other.shape_)) {
+    //         throw std::invalid_argument("All tensors must have same shape");
+    //     }
         
-        // Determine output dtype
-        Dtype output_dtype = promote_dtypes_internal(input.dtype_, other.dtype_);
+    //     // Determine output dtype
+    //     Dtype output_dtype = promote_dtypes_internal(input.dtype_, other.dtype_);
+    //     //include promotion for the smaller dtype tensor
+    //     Tensor input_promoted = (input.dtype() != output_dtype) ? input.as_type(output_dtype) : input;
+    //     Tensor other_promoted = (other.dtype() != output_dtype) ? other.as_type(output_dtype) : other;
+    //     // Create output tensor
+    //     Tensor result(input.shape_, output_dtype, input.device_, false);
         
-        // Create output tensor
-        Tensor result(input.shape_, output_dtype, input.device_, false);
+    //     // Dispatch to CPU or CUDA backend
+    //     if (condition.is_cpu()) {
+    //         cpu_where(condition, input_promoted, other_promoted, result);
+    //     } else {
+    // #ifdef WITH_CUDA
+    //         cuda_where(condition, input_promoted, other_promoted, result);
+    // #else
+    //         throw std::runtime_error("CUDA support not compiled");
+    // #endif
+    //     }
         
-        // Dispatch to CPU or CUDA backend
-        if (condition.is_cpu()) {
-            cpu_where(condition, input, other, result);
-        } else {
-    #ifdef WITH_CUDA
-            cuda_where(condition, input, other, result);
-    #else
-            throw std::runtime_error("CUDA support not compiled");
-    #endif
-        }
-        
-        return result;
-    }
+    //     return result;
+    // }
 
     // Scalar overload - requires Tensor::full() implementation
     // For now, just throw an error or create manually
-    Tensor Tensor::where(const Tensor& condition, float input_scalar, const Tensor& other) {
-        // Create tensor filled with scalar
-        Tensor input_tensor(condition.shape_, other.dtype_, condition.device_, false);
+    // Tensor Tensor::where(const Tensor& condition, float input_scalar, const Tensor& other) {
+    //     // Create tensor filled with scalar
+    //     Tensor input_tensor(condition.shape_, other.dtype_, condition.device_, false);
         
-        // Fill with scalar value
-        const size_t n = input_tensor.numel();
-        if (other.dtype_ == Dtype::Float32) {
-            float* ptr = input_tensor.data<float>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = input_scalar;
-        } else if (other.dtype_ == Dtype::Int32) {
-            int32_t* ptr = input_tensor.data<int32_t>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(input_scalar);
-        } else {
-            throw std::runtime_error("where scalar overload: unsupported dtype");
-        }
+    //     // Fill with scalar value
+    //     const size_t n = input_tensor.numel();
+    //     if (other.dtype_ == Dtype::Float32) {
+    //         float* ptr = input_tensor.data<float>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = input_scalar;
+    //     } else if (other.dtype_ == Dtype::Int32) {
+    //         int32_t* ptr = input_tensor.data<int32_t>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(input_scalar);
+    //     } else {
+    //         throw std::runtime_error("where scalar overload: unsupported dtype");
+    //     }
         
-        return where(condition, input_tensor, other);
-    }
+    //     return where(condition, input_tensor, other);
+    // }
 
-    Tensor Tensor::where(const Tensor& condition, const Tensor& input, float other_scalar) {
-        Tensor other_tensor(condition.shape_, input.dtype_, condition.device_, false);
+    // Tensor Tensor::where(const Tensor& condition, const Tensor& input, float other_scalar) {
+    //     Tensor other_tensor(condition.shape_, input.dtype_, condition.device_, false);
         
-        const size_t n = other_tensor.numel();
-        if (input.dtype_ == Dtype::Float32) {
-            float* ptr = other_tensor.data<float>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = other_scalar;
-        } else if (input.dtype_ == Dtype::Int32) {
-            int32_t* ptr = other_tensor.data<int32_t>();
-            for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(other_scalar);
-        }
-        
-        return where(condition, input, other_tensor);
-    }
+    //     const size_t n = other_tensor.numel();
+    //     if (input.dtype_ == Dtype::Float32) {
+    //         float* ptr = other_tensor.data<float>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = other_scalar;
+    //     } 
+    //     else if(input.dtype_ == Dtype::Float64){
+    //         double* ptr = other_tensor.data<double>();
+    //         for (size_t i=0; i<n; ++i) ptr[i] = static_cast<double>(other_scalar);
+    //     }
+    //     else if(input.dtype_ == Dtype::Bfloat16){
+    //         bfloat16_t* ptr = other_tensor.data<bfloat16_t>();
+    //         for(size_t i=0; i<n; ++i) ptr[i] = static_cast<bfloat16_t>(other_scalar);
+    //     }
+    //     else if(input.dtype_ == Dtype::Float16){
+    //         float16_t* ptr = other_tensor.data<float16_t>();
+    //         for(size_t i=0; i<n; ++i) ptr[i] = static_cast<float16_t>(other_scalar);
+    //     }
+    //     // else if(input.dtype_ == Dtype::UInt8){
+    //     //     uint8_t* ptr = other_tensor.data<uint8_t>();
+    //     //     for(size_t i=0; i<n; ++i) ptr[i] = static_cast<uint8_t>(other_scalar);
+    //     // }
+    //     //  else if(input.dtype_ == Dtype::UInt16){
+    //     //     uint16_t* ptr = other_tensor.data<uint16_t>();
+    //     //     for(size_t i=0; i<n; ++i) ptr[i] = static_cast<uint16_t>(other_scalar);
+    //     // }
+    //     // else if(input.dtype_ == Dtype::UInt32){
+    //     //     uint32_t* ptr = other_tensor.data<uint32_t>();
+    //     //     for(size_t i=0; i<n; ++i) ptr[i] = static_cast<uint32_t>(other_scalar);
+    //     // }
+    //     // else if(input.dtype_ == Dtype::UInt64){
+    //     //     uint64_t* ptr = other_tensor.data<uint64_t>();
+    //     //     for(size_t i=0; i<n; ++i) ptr[i] = static_cast<uint64_t>(other_scalar);
+    //     // }
+    //    else if (input.dtype_ == Dtype::Int16) {
+    //         int16_t* ptr = other_tensor.data<int16_t>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int16_t>(other_scalar);
+    //     }
+    //     else if (input.dtype_ == Dtype::Int32) {
+    //         int32_t* ptr = other_tensor.data<int32_t>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int32_t>(other_scalar);
+    //     }
+    //     else if (input.dtype_ == Dtype::Int64) {
+    //         int64_t* ptr = other_tensor.data<int64_t>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int64_t>(other_scalar);
+    //     }
+    //      else if (input.dtype_ == Dtype::Bool) {
+    //         int64_t* ptr = other_tensor.data<int64_t>();
+    //         for (size_t i = 0; i < n; ++i) ptr[i] = static_cast<int64_t>(other_scalar);
+    //     }
+    //     return where(condition, input, other_tensor);
+    // }
 
-    Tensor Tensor::where(const Tensor& condition, float input_scalar, float other_scalar) {
-        Tensor input_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
-        Tensor other_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
+    // Tensor Tensor::where(const Tensor& condition, float input_scalar, float other_scalar) {
+    //     Tensor input_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
+    //     Tensor other_tensor(condition.shape_, Dtype::Float32, condition.device_, false);
         
-        const size_t n = input_tensor.numel();
-        float* input_ptr = input_tensor.data<float>();
-        float* other_ptr = other_tensor.data<float>();
+    //     const size_t n = input_tensor.numel();
+    //     float* input_ptr = input_tensor.data<float>();
+    //     float* other_ptr = other_tensor.data<float>();
         
-        for (size_t i = 0; i < n; ++i) {
-            input_ptr[i] = input_scalar;
-            other_ptr[i] = other_scalar;
-        }
+    //     for (size_t i = 0; i < n; ++i) {
+    //         input_ptr[i] = input_scalar;
+    //         other_ptr[i] = other_scalar;
+    //     }
         
-        return where(condition, input_tensor, other_tensor);
-    }
+    //     return where(condition, input_tensor, other_tensor);
+    // }
 
     // bool 
     template const bool* Tensor::data<bool>() const;
     template bool* Tensor::data<bool>();
+// int8_t (short)
+    template const int8_t* Tensor::data<int8_t>() const;
+    template int8_t* Tensor::data<int8_t>();
 
     // int16_t (short)
     template const short* Tensor::data<short>() const;
@@ -741,5 +810,61 @@ Tensor Tensor::to_bool() const {
 
     template const bfloat16_t* Tensor::data<bfloat16_t>() const;
     template bfloat16_t* Tensor::data<bfloat16_t>();
+// unsigned types 
+template const uint8_t* Tensor::data<uint8_t>() const;
+template uint8_t* Tensor::data<uint8_t>();
+
+template const uint16_t* Tensor::data<uint16_t>() const;
+template uint16_t* Tensor::data<uint16_t>();
+
+template const uint32_t* Tensor::data<uint32_t>() const;
+template uint32_t* Tensor::data<uint32_t>();
+
+template const uint64_t* Tensor::data<uint64_t>() const;
+template uint64_t* Tensor::data<uint64_t>();
+    // Complex types
+    template const complex32_t* Tensor::data<complex32_t>() const;
+    template complex32_t* Tensor::data<complex32_t>();
+    
+    template const complex64_t* Tensor::data<complex64_t>() const;
+    template complex64_t* Tensor::data<complex64_t>();
+    
+    template const complex128_t* Tensor::data<complex128_t>() const;
+    template complex128_t* Tensor::data<complex128_t>();
+
+    // Explicit instantiations for set_data
+    template void Tensor::set_data<bool>(const std::vector<bool>&);
+    template void Tensor::set_data<int8_t>(const std::vector<int8_t>&);
+    template void Tensor::set_data<int16_t>(const std::vector<int16_t>&);
+    template void Tensor::set_data<int32_t>(const std::vector<int32_t>&);
+    template void Tensor::set_data<int64_t>(const std::vector<int64_t>&);
+    template void Tensor::set_data<float>(const std::vector<float>&);
+    template void Tensor::set_data<double>(const std::vector<double>&);
+    template void Tensor::set_data<uint8_t>(const std::vector<uint8_t>&);
+    template void Tensor::set_data<uint16_t>(const std::vector<uint16_t>&);
+    template void Tensor::set_data<uint32_t>(const std::vector<uint32_t>&);
+    template void Tensor::set_data<uint64_t>(const std::vector<uint64_t>&);
+    template void Tensor::set_data<float16_t>(const std::vector<float16_t>&);
+    template void Tensor::set_data<bfloat16_t>(const std::vector<bfloat16_t>&);
+    template void Tensor::set_data<complex32_t>(const std::vector<complex32_t>&);
+    template void Tensor::set_data<complex64_t>(const std::vector<complex64_t>&);
+    template void Tensor::set_data<complex128_t>(const std::vector<complex128_t>&);
+
+    // Explicit instantiations for fill
+    template void Tensor::fill<bool>(bool);
+    template void Tensor::fill<int16_t>(int16_t);
+    template void Tensor::fill<int32_t>(int32_t);
+    template void Tensor::fill<int64_t>(int64_t);
+    template void Tensor::fill<uint8_t>(uint8_t);
+    template void Tensor::fill<uint16_t>(uint16_t);
+    template void Tensor::fill<uint32_t>(uint32_t);
+    template void Tensor::fill<uint64_t>(uint64_t);
+    template void Tensor::fill<float>(float);
+    template void Tensor::fill<double>(double);
+    template void Tensor::fill<float16_t>(float16_t);
+    template void Tensor::fill<bfloat16_t>(bfloat16_t);
+    template void Tensor::fill<complex32_t>(complex32_t);
+    template void Tensor::fill<complex64_t>(complex64_t);
+    template void Tensor::fill<complex128_t>(complex128_t);
 
 }

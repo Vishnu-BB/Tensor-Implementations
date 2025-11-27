@@ -39,20 +39,27 @@ static inline float atanhf_fn(float x) { return std::atanh(x); }
 static inline double atanh_fn(double x) { return std::atanh(x); }
 
 // ============================================================================
-// Generic Unary Kernel for CPU - REUSE FROM EXPONENTS
+// Generic Unary Kernel for CPU
 // ============================================================================
 template<typename T_In, typename T_Out, T_Out(*Func)(T_Out)>
 void unary_kernel_cpu(const T_In* in, T_Out* out, size_t size) {
-    #pragma omp parallel for
-    for (size_t i = 0; i < size; ++i) {
-        T_Out temp_val = static_cast<T_Out>(in[i]);
-        out[i] = Func(temp_val);
+    constexpr bool is_complex_input = 
+        std::is_same_v<T_In, complex32_t> || 
+        std::is_same_v<T_In, complex64_t> || 
+        std::is_same_v<T_In, complex128_t>;
+
+    if constexpr (!is_complex_input) {
+        #pragma omp parallel for
+        for (size_t i = 0; i < size; ++i) {
+            out[i] = Func(static_cast<T_Out>(in[i]));
+        }
     }
 }
 
 // ============================================================================
 // Generic Out-of-Place CPU Wrapper for Trigonometric Functions
 // ============================================================================
+
 template<float(*FloatFunc)(float), double(*DoubleFunc)(double)>
 Tensor generic_trigonometric_out_cpu(const Tensor& input_tensor) {
     // Handle bf16/f16 by promoting to float32
@@ -60,31 +67,32 @@ Tensor generic_trigonometric_out_cpu(const Tensor& input_tensor) {
         Dtype original_dtype = input_tensor.dtype();
         Tensor temp_input = convert_half_to_float32(input_tensor);
         Tensor temp_output(input_tensor.shape(), Dtype::Float32, input_tensor.device(), input_tensor.requires_grad());
-        
+        // Apply FloatFunc on float values
         unary_kernel_cpu<float, float, FloatFunc>(
             temp_input.data<float>(),
             temp_output.data<float>(),
             input_tensor.numel()
         );
-        
         Tensor output(input_tensor.shape(), original_dtype, input_tensor.device(), input_tensor.requires_grad());
         convert_float32_to_half(temp_output, output);
         return output;
     }
     
-    // Determine output dtype (promote integers)
+    if (is_complex(input_tensor.dtype())) {
+        throw std::runtime_error(
+            "Trigonometric functions are not yet supported for complex types: " +
+            get_dtype_name(input_tensor.dtype())
+        );
+    }
+    
+    // Real types: promote integers and apply FloatFunc/DoubleFunc
     Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
     Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
     
-    // Use dispatch_by_dtype to handle input dtype
     dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
         using InputType = decltype(in_type_instance);
-        
-        // Use dispatch_by_dtype to handle output dtype
         dispatch_by_dtype(output_dtype, [&](auto out_type_instance) {
             using OutputType = decltype(out_type_instance);
-            
-            // Select appropriate function based on output type
             if constexpr (std::is_same_v<OutputType, float>) {
                 unary_kernel_cpu<InputType, OutputType, FloatFunc>(
                     input_tensor.data<InputType>(),
@@ -106,43 +114,49 @@ Tensor generic_trigonometric_out_cpu(const Tensor& input_tensor) {
 // ============================================================================
 // Generic In-Place CPU Wrapper for Trigonometric Functions
 // ============================================================================
+
 template<float(*FloatFunc)(float), double(*DoubleFunc)(double)>
 void generic_trigonometric_in_cpu(Tensor& input_tensor) {
     // Handle bf16/f16 by promoting to float32
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
-        [[maybe_unused]] Dtype original_dtype = input_tensor.dtype();
         Tensor temp_input = convert_half_to_float32(input_tensor);
         Tensor temp_output(input_tensor.shape(), Dtype::Float32, input_tensor.device(), input_tensor.requires_grad());
-        
-        unary_kernel_cpu<float, float, FloatFunc>(
-            temp_input.data<float>(),
-            temp_output.data<float>(),
-            input_tensor.numel()
-        );
-        
+        const float* in_ptr = temp_input.data<float>();
+        float* out_ptr = temp_output.data<float>();
+        #pragma omp parallel for
+        for (size_t i = 0; i < input_tensor.numel(); ++i) {
+            out_ptr[i] = FloatFunc(in_ptr[i]);
+        }
         convert_float32_to_half(temp_output, input_tensor);
         return;
     }
+    
+    if (is_complex(input_tensor.dtype())) {
+        throw std::runtime_error(
+            "Trigonometric functions are not yet supported for complex types: " +
+            get_dtype_name(input_tensor.dtype())
+        );
+    }
+    
     // Reject integer types for in-place operations
     if (is_int(input_tensor.dtype())) {
         throw std::runtime_error("Error: cannot do inplace operations for integer data types!");
     }
-    // Use dispatch_by_dtype for float types
+    
+    // Real types in-place
     dispatch_by_dtype(input_tensor.dtype(), [&](auto type_instance) {
         using DataType = decltype(type_instance);
-        
-        if constexpr (std::is_same_v<DataType, float>) {
-            unary_kernel_cpu<DataType, DataType, FloatFunc>(
-                input_tensor.data<DataType>(),
-                input_tensor.data<DataType>(),
-                input_tensor.numel()
-            );
-        } else if constexpr (std::is_same_v<DataType, double>) {
-            unary_kernel_cpu<DataType, DataType, DoubleFunc>(
-                input_tensor.data<DataType>(),
-                input_tensor.data<DataType>(),
-                input_tensor.numel()
-            );
+        constexpr bool is_complex = 
+            std::is_same_v<DataType, complex32_t> || 
+            std::is_same_v<DataType, complex64_t> || 
+            std::is_same_v<DataType, complex128_t>;
+
+        if constexpr (!is_complex) {
+            DataType* data_ptr = input_tensor.data<DataType>();
+            #pragma omp parallel for
+            for (size_t i = 0; i < input_tensor.numel(); ++i) {
+                data_ptr[i] = FloatFunc(data_ptr[i]); // FloatFunc works for both float and double via overload
+            }
         }
     });
 }

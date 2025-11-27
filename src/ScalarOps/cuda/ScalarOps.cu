@@ -3,15 +3,25 @@
 #include <device_launch_parameters.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include <stdexcept>
-#include <type_traits>
-#include "core/Tensor.h"
 #include "core/TensorDispatch.h"
+#include <stdexcept>
+ //#include <type_traits>  // Causes CUDA libcudacxx namespace conflicts
+#include "core/Tensor.h"
+#include "ops/ScalarOps.h"
 #include "dtype/Types.h"
-#include "dtype/DtypeTraits.h"  // ✅ For get_division_output_dtype
+#include "dtype/DtypeTraits.h"
 
 namespace OwnTensor {
 namespace { // file-local CUDA helpers & kernels
+// Helper trait for complex types
+
+template <typename T> struct is_complex_t : std::false_type {};
+
+template <> struct is_complex_t<complex32_t> : std::true_type {};
+
+template <> struct is_complex_t<complex64_t> : std::true_type {};
+
+template <> struct is_complex_t<complex128_t> : std::true_type {};
 
 inline int half_fmt(Dtype dt) { // 0 = numeric; 1 = fp16; 2 = bf16
     return (dt == Dtype::Float16) ? 1 : (dt == Dtype::Bfloat16 ? 2 : 0);
@@ -37,23 +47,38 @@ __device__ inline uint16_t dev_float_to_fp16(float f) {
 }
 
 template <typename T>
-__device__ inline float ldf(const T* p, size_t i, int) { return static_cast<float>(p[i]); }
-
-template <>
-[[maybe_unused]] __device__ inline float ldf<uint16_t>(const uint16_t* p, size_t i, int fmt) {
-    return (fmt == 1) ? dev_fp16_to_float(p[i])
-         : (fmt == 2) ? dev_bf16_to_float(p[i])
-                      : static_cast<float>(p[i]);
+__device__ inline auto ldf(const T* p, size_t i, int fmt) {
+    if constexpr (std::is_same_v<T, uint16_t>) {
+        return (fmt == 1) ? dev_fp16_to_float(p[i])
+             : (fmt == 2) ? dev_bf16_to_float(p[i])
+                          : (float)p[i];
+    } else if constexpr (std::is_same_v<T, double>) {
+        return p[i];
+    } else if constexpr (std::is_same_v<T, complex32_t> || 
+                         std::is_same_v<T, complex64_t> || 
+                         std::is_same_v<T, complex128_t>) {
+        return p[i];
+    } else {
+        return static_cast<float>(p[i]);
+    }
 }
 
-template <typename T>
-__device__ inline void stf(T* p, size_t i, float v, int) { p[i] = static_cast<T>(v); }
-
-template <>
-[[maybe_unused]] __device__ inline void stf<uint16_t>(uint16_t* p, size_t i, float v, int fmt) {
-    p[i] = (fmt == 1) ? dev_float_to_fp16(v)
-         : (fmt == 2) ? dev_float_to_bf16(v)
-                      : static_cast<uint16_t>(v);
+template <typename T, typename V>
+__device__ inline void stf(T* p, size_t i, V v, int fmt) {
+    if constexpr (std::is_same_v<T, uint16_t>) {
+        auto r = [&]() { if constexpr (is_complex_t<V>::value) return v.real(); else return v; }();
+        p[i] = (fmt == 1) ? dev_float_to_fp16((float)r)
+             : (fmt == 2) ? dev_float_to_bf16((float)r)
+                          : (uint16_t)r;
+    } else if constexpr (is_complex_t<V>::value && !is_complex_t<T>::value) {
+        // Complex -> Scalar: take real part
+        p[i] = static_cast<T>(v.real());
+    } else if constexpr (is_complex_t<T>::value && is_complex_t<V>::value) {
+        // Complex -> Complex: component-wise
+        p[i] = T(v.real(), v.imag());
+    } else {
+        p[i] = static_cast<T>(v);
+    }
 }
 
 inline dim3 pick_grid(size_t n, dim3 b) {
@@ -128,7 +153,7 @@ __global__ void k_div_copy(const T* a, T* o, float s, size_t n, int fmt) {
 template<typename SrcT, typename DstT>
 __global__ void k_div_copy_cross(const SrcT* a, DstT* o, float s, size_t n, int src_fmt, int dst_fmt) {
     for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
-        float val = ldf<SrcT>(a, i, src_fmt) / s;
+        auto val = ldf<SrcT>(a, i, src_fmt) / s;
         stf<DstT>(o, i, val, dst_fmt);
     }
 }
@@ -158,8 +183,9 @@ __global__ void k_div_copy_scalar_tensor_cross(const SrcT* a, DstT* o, float s, 
             if (src_fmt == 0 && a[i] == (SrcT)0) { 
                 if (flag) atomicExch(flag, 1); 
             }
+
         }
-        float val = s / ldf<SrcT>(a, i, src_fmt);
+        auto val = s / ldf<SrcT>(a, i, src_fmt);
         stf<DstT>(o, i, val, dst_fmt);
     }
 }
@@ -181,50 +207,66 @@ __global__ void k_neq_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
 
 template<typename T>
 __global__ void k_geq_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (ldf<T>(a, i, fmt) >= s) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (ldf<T>(a, i, fmt) >= s) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_leq_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (ldf<T>(a, i, fmt) <= s) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (ldf<T>(a, i, fmt) <= s) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_lt_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (ldf<T>(a, i, fmt) < s) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (ldf<T>(a, i, fmt) < s) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_gt_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (ldf<T>(a, i, fmt) > s) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (ldf<T>(a, i, fmt) > s) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_s_geq_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (s >= ldf<T>(a, i, fmt)) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (s >= ldf<T>(a, i, fmt)) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_s_leq_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (s <= ldf<T>(a, i, fmt)) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (s <= ldf<T>(a, i, fmt)) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_s_lt_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (s < ldf<T>(a, i, fmt)) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (s < ldf<T>(a, i, fmt)) ? 1 : 0;
+    }
 }
 
 template<typename T>
 __global__ void k_s_gt_copy(const T* a, uint8_t* o, float s, size_t n, int fmt) {
-    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x)
-        o[i] = (s > ldf<T>(a, i, fmt)) ? 1 : 0;
+    for (size_t i = blockIdx.x*blockDim.x + threadIdx.x; i < n; i += blockDim.x*gridDim.x) {
+        if constexpr (is_complex_t<T>::value) o[i] = 0;
+        else o[i] = (s > ldf<T>(a, i, fmt)) ? 1 : 0;
+    }
 }
 
 // ============================================================================
@@ -457,6 +499,6 @@ Tensor cuda_s_lt_copy(double s, const Tensor& a, cudaStream_t stream) {
     dispatch_by_dtype(a.dtype(), [&](auto d){ using T = decltype(d); launch_copy_to_bool<T>(a, out, s, k_s_lt_copy<T>, stream); });
     return out;
 }
-
-} // namespace OwnTensor
+}
+ // namespace OwnTensor
 #endif // WITH_CUDA

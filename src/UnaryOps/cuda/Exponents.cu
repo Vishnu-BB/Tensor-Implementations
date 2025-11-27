@@ -14,16 +14,16 @@ namespace OwnTensor {
 // ============================================================================
 // Device Function Pointers for GPU Math Operations
 // ============================================================================
-static inline __device__ float expf_fn(float x) { return expf(x); }
-static inline __device__ double exp_fn(double x) { return exp(x); }
-static inline __device__ float exp2f_fn(float x) { return exp2f(x); }
-static inline __device__ double exp2_fn(double x) { return exp2(x); }
-static inline __device__ float logf_fn(float x) { return logf(x); }
-static inline __device__ double log_fn(double x) { return log(x); }
-static inline __device__ float log2f_fn(float x) { return log2f(x); }
-static inline __device__ double log2_fn(double x) { return log2(x); }
-static inline __device__ float log10f_fn(float x) { return log10f(x); }
-static inline __device__ double log10_fn(double x) { return log10(x); }
+static inline __device__ float expf_fn(float x) { return ::expf(x); }
+static inline __device__ double exp_fn(double x) { return ::exp(x); }
+static inline __device__ float exp2f_fn(float x) { return ::exp2f(x); }
+static inline __device__ double exp2_fn(double x) { return ::exp2(x); }
+static inline __device__ float logf_fn(float x) { return ::logf(x); }
+static inline __device__ double log_fn(double x) { return ::log(x); }
+static inline __device__ float log2f_fn(float x) { return ::log2f(x); }
+static inline __device__ double log2_fn(double x) { return ::log2(x); }
+static inline __device__ float log10f_fn(float x) { return ::log10f(x); }
+static inline __device__ double log10_fn(double x) { return ::log10(x); }
 
 // ============================================================================
 // Generic CUDA Unary Kernel (for standard types)
@@ -70,8 +70,12 @@ inline Dtype get_promoted_dtype(Dtype input_dtype) {
     switch(input_dtype) {
         case Dtype::Int16:
         case Dtype::Int32:
+        case Dtype::UInt8:
+        case Dtype::UInt16:
+        case Dtype::UInt32:
             return Dtype::Float32;
         case Dtype::Int64:
+        case Dtype::UInt64:
             return Dtype::Float64;
         default:
             return input_dtype;
@@ -88,8 +92,12 @@ static auto dispatch_gpu_dtype(Dtype dtype, Func&& f) {
         case Dtype::Int16: return f(int16_t{});
         case Dtype::Int32: return f(int32_t{});
         case Dtype::Int64: return f(int64_t{});
+        case Dtype::UInt8: return f(uint8_t{});
+        case Dtype::UInt16: return f(uint16_t{});
+        case Dtype::UInt32: return f(uint32_t{});
+        case Dtype::UInt64: return f(uint64_t{});
         //Boolean
-        case Dtype::Bool: return f(uint8_t{});
+        case Dtype::Bool: return f(bool{});
         // Floating point types
         case Dtype::Float32: return f(float{});
         case Dtype::Float64: return f(double{});

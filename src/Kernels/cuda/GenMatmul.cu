@@ -8,6 +8,7 @@
 
 #include "ops/Matmul.cuh"
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
 
 namespace OwnTensor {
 

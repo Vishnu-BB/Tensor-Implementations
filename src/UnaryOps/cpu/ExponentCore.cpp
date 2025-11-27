@@ -4,7 +4,7 @@
 #include "core/TensorDispatch.h"
 #include "ops/helpers/exp_log.hpp"
 #include "dtype/DtypeCastUtils.h"
-#include "dtype/DtypeTraits.h"  // ← ADD THIS for is_int()
+#include "dtype/DtypeTraits.h"
 
 namespace OwnTensor {
 // ============================================================================
@@ -20,19 +20,35 @@ static inline float log2f_fn(float x) { return log2f(x); }
 static inline double log2_fn(double x) { return std::log2(x); }
 static inline float log10f_fn(float x) { return log10f(x); }
 static inline double log10_fn(double x) { return std::log10(x); }
+
 // ============================================================================
 // Generic Unary Kernel for CPU
 // ============================================================================
 template<typename T_In, typename T_Out, T_Out(*Func)(T_Out)>
 void unary_kernel_cpu(const T_In* in, T_Out* out, size_t size) {
-    #pragma omp parallel for
-    for (size_t i = 0; i < size; ++i) {
-        T_Out temp_val = static_cast<T_Out>(in[i]);
-        out[i] = Func(temp_val);
+    // Compile-time check: detect complex types
+    constexpr bool in_is_complex = 
+        std::is_same_v<T_In, complex32_t> ||
+        std::is_same_v<T_In, complex64_t> ||
+        std::is_same_v<T_In, complex128_t>;
+    
+    constexpr bool out_is_complex = 
+        std::is_same_v<T_Out, complex32_t> ||
+        std::is_same_v<T_Out, complex64_t> ||
+        std::is_same_v<T_Out, complex128_t>;
+    
+    // Only proceed if both types are compatible (both complex or both non-complex)
+    if constexpr (in_is_complex == out_is_complex) {
+        #pragma omp parallel for
+        for (size_t i = 0; i < size; ++i) {
+            T_Out temp_val = static_cast<T_Out>(in[i]);
+            out[i] = Func(temp_val);
+        }
     }
 }
+
 // ============================================================================
-// Generic Out-of-Place CPU Wrapper Using dispatch_by_dtype - FIXED VERSION
+// Generic Out-of-Place CPU Wrapper Using dispatch_by_dtype
 // ============================================================================
 template<float(*FloatFunc)(float), double(*DoubleFunc)(double)>
 Tensor generic_unary_out_cpu(const Tensor& input_tensor) {
@@ -53,12 +69,18 @@ Tensor generic_unary_out_cpu(const Tensor& input_tensor) {
         return output;
     }
     
+    // if (is_complex(input_tensor.dtype())) {
+    //     throw std::runtime_error(
+    //         "Exponential/Logarithmic functions are not yet supported for complex types: " +
+    //         get_dtype_name(input_tensor.dtype())
+    //     );
+    // }
+    
     // Determine output dtype (promote integers)
     Dtype output_dtype = get_promoted_dtype(input_tensor.dtype());
     Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
     
     // Use dispatch_by_dtype to handle input dtype
-    // IMPORTANT: dispatch_by_dtype passes the ACTUAL TYPE instance
     dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
         using InputType = decltype(in_type_instance);
         
@@ -84,14 +106,14 @@ Tensor generic_unary_out_cpu(const Tensor& input_tensor) {
     });
     return output;
 }
+
 // ============================================================================
-// Generic In-Place CPU Wrapper Using dispatch_by_dtype - FIXED VERSION
+// Generic In-Place CPU Wrapper Using dispatch_by_dtype
 // ============================================================================
 template<float(*FloatFunc)(float), double(*DoubleFunc)(double)>
 void generic_unary_in_cpu(Tensor& input_tensor) {
     // Handle bf16/f16 by promoting to float32
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
-        [[maybe_unused]] Dtype original_dtype = input_tensor.dtype();
         Tensor temp_input = convert_half_to_float32(input_tensor);
         Tensor temp_output(input_tensor.shape(), Dtype::Float32, input_tensor.device(), input_tensor.requires_grad());
         
@@ -104,15 +126,21 @@ void generic_unary_in_cpu(Tensor& input_tensor) {
         convert_float32_to_half(temp_output, input_tensor);
         return;
     }
+    
+    // if (is_complex(input_tensor.dtype())) {
+    //     throw std::runtime_error(
+    //         "Exponential/Logarithmic functions are not yet supported for complex types: " +
+    //         get_dtype_name(input_tensor.dtype())
+    //     );
+    // }
+    
     // Reject integer types for in-place operations
     if (is_int(input_tensor.dtype())) {
         throw std::runtime_error("Error: cannot do inplace operations for integer data types!");
     }
+    
     // Use dispatch_by_dtype for float types
-    // IMPORTANT: dispatch_by_dtype passes the ACTUAL TYPE, not a type_tag!
     dispatch_by_dtype(input_tensor.dtype(), [&](auto type_instance) {
-        // type_instance is already float16_t/bfloat16_t/float/double/int16_t/etc.
-        // NOT a type tag! So we use decltype to get its type
         using DataType = decltype(type_instance);
         
         if constexpr (std::is_same_v<DataType, float>) {
@@ -130,8 +158,9 @@ void generic_unary_in_cpu(Tensor& input_tensor) {
         }
     });
 }
+
 // ============================================================================
-// CPU Wrapper Functions - REMOVE TRY-CATCH BLOCKS
+// CPU Wrapper Functions
 // ============================================================================
 Tensor exp_out_cpu_wrap(const Tensor& input) {
     return generic_unary_out_cpu<expf_fn, exp_fn>(input);

@@ -3,10 +3,6 @@
 #ifndef OWNTENSOR_REDUCTIONS_IMPL_H
 #define OWNTENSOR_REDUCTIONS_IMPL_H
 
-#include "core/Tensor.h" 
-#include "dtype/Types.h" 
-#include "ops/helpers/ReductionUtils.h" 
-#include "ops/helpers/ReductionOps.h" 
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -16,6 +12,11 @@
 #include <cstdint>
 #include <numeric>
 #include <omp.h>
+
+#include "core/Tensor.h" 
+#include "dtype/Types.h" 
+#include "ops/helpers/ReductionUtils.h" 
+#include "ops/helpers/ReductionOps.h"
 
 // #ifdef WITH_CUDA
 // #include "ReductionImplGPU.h" 
@@ -45,6 +46,50 @@ Tensor dispatch_variance_gpu(const Tensor& input,
                              bool keepdim,
                              int64_t correction,
                              cudaStream_t stream);//✨✨✨                        
+// =================================================================
+// HELPER: Safe isnan check for both real and complex types
+// =================================================================
+template<typename T>
+inline bool safe_isnan(const T& val) {
+    if constexpr (std::is_same_v<T, complex32_t> || 
+                  std::is_same_v<T, complex64_t> || 
+                  std::is_same_v<T, complex128_t>) {
+        // For complex types, check if either real or imaginary parts are NaN
+        // However, for reduction operations with complex types, they typically
+        // aren't supported for NaN-aware operations, so return false
+        return false;
+    } else if constexpr (std::is_same_v<T, float16_t> || std::is_same_v<T, bfloat16_t>) {
+        return std::isnan(static_cast<float>(val));
+    } else if constexpr (std::is_floating_point_v<T>) {
+        return std::isnan(val);
+    } else {
+        // Non-floating types (integers, bool) can't be NaN
+        return false;
+    }
+}
+
+// =================================================================
+// HELPER: Convert any type to bool (for all/any reductions)
+// =================================================================
+template<typename T>
+inline bool to_bool_value(const T& val) {
+    if constexpr (std::is_same_v<T, complex32_t>) {
+        // Complex is true if either real or imaginary part is non-zero
+        float r = static_cast<float>(val.real());
+        float i = static_cast<float>(val.imag());
+        return (r != 0.0f) || (i != 0.0f);
+    } else if constexpr (std::is_same_v<T, complex64_t>) {
+        return (val.real() != 0.0f) || (val.imag() != 0.0f);
+    } else if constexpr (std::is_same_v<T, complex128_t>) {
+        return (val.real() != 0.0) || (val.imag() != 0.0);
+    } else if constexpr (std::is_same_v<T, bool>) {
+        return val;
+    } else {
+        // For all other types (int, float, etc.), non-zero is true
+        return val != T(0);
+    }
+}
+
 // =================================================================
 // HELPER: Check if we should use double accumulation for better precision
 // =================================================================
@@ -125,19 +170,8 @@ Tensor reduce_kernel(
     // =================================================================
     // Use double accumulation for FP16/BF16 for maximum precision
     // =================================================================
-    using AccumulatorT = typename std::conditional<
-        std::is_same_v<AccT, ValueIndex<T>>,
-        ValueIndex<T>,  
-        typename std::conditional<
-            should_use_double_accumulation<T>(),
-            double,  // FP16/BF16 use double accumulation
-            typename std::conditional<
-                std::is_integral_v<T>,
-                int64_t,  // Integers use int64_t accumulation
-                T         // FP32/FP64 use their own type
-            >::type
-        >::type
-    >::type;
+    // Use AccT directly if it's explicitly provided, otherwise compute based on T
+    using AccumulatorT = AccT;
 
     // =================================================================
     // Kahan summation for floating point sum operations (numerical stability)
@@ -296,9 +330,14 @@ Tensor reduce_kernel(
                     int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
                     T input_value = input_data[input_lin_idx];
 
+
                       // ✅ FIX: Proper type conversion based on AccumulatorT
                     if constexpr (std::is_same_v<AccT, ValueIndex<T>>) {
                         // Should never reach here - handled above
+                    } else if constexpr (std::is_same_v<AccT, bool>) {
+                        // For AllOp/AnyOp: convert input value to bool
+                        bool val_as_bool = to_bool_value(input_value);
+                        accumulator = op.reduce(accumulator, val_as_bool);
                     } else {
                         AccumulatorT val_acc = static_cast<AccumulatorT>(input_value);
                         accumulator = op.reduce(accumulator, val_acc);
@@ -318,6 +357,32 @@ Tensor reduce_kernel(
                     output_data[output_index] = static_cast<OutputCppT>(
                         static_cast<T>(static_cast<float>(accumulator))
                     );
+                } else if constexpr (std::is_same_v<OutputCppT, complex32_t>) {
+                    if constexpr (std::is_same_v<AccumulatorT, complex32_t>) {
+                        output_data[output_index] = accumulator;
+                    } else if constexpr (std::is_same_v<AccumulatorT, complex64_t> || std::is_same_v<AccumulatorT, complex128_t>) {
+                        output_data[output_index] = complex32_t(static_cast<float>(accumulator.real()), static_cast<float>(accumulator.imag()));
+                    } else {
+                        output_data[output_index] = complex32_t(static_cast<float>(accumulator), 0.0f);
+                    }
+                } else if constexpr (std::is_same_v<OutputCppT, complex64_t>) {
+                    if constexpr (std::is_same_v<AccumulatorT, complex64_t>) {
+                        output_data[output_index] = accumulator;
+                    } else if constexpr (std::is_same_v<AccumulatorT, complex32_t>) {
+                        output_data[output_index] = complex64_t(static_cast<float>(accumulator.real()), static_cast<float>(accumulator.imag()));
+                    } else if constexpr (std::is_same_v<AccumulatorT, complex128_t>) {
+                        output_data[output_index] = complex64_t(static_cast<float>(accumulator.real()), static_cast<float>(accumulator.imag()));
+                    } else {
+                        output_data[output_index] = complex64_t(static_cast<float>(accumulator), 0.0f);
+                    }
+                } else if constexpr (std::is_same_v<OutputCppT, complex128_t>) {
+                    if constexpr (std::is_same_v<AccumulatorT, complex128_t>) {
+                        output_data[output_index] = accumulator;
+                    } else if constexpr (std::is_same_v<AccumulatorT, complex32_t> || std::is_same_v<AccumulatorT, complex64_t>) {
+                        output_data[output_index] = complex128_t(static_cast<double>(accumulator.real()), static_cast<double>(accumulator.imag()));
+                    } else {
+                        output_data[output_index] = complex128_t(static_cast<double>(accumulator), 0.0);
+                    }
                 } else {
                     output_data[output_index] = static_cast<OutputCppT>(accumulator);
                 }
@@ -338,7 +403,20 @@ Tensor dispatch_reduction(const Tensor& input, const std::vector<int64_t>& norma
     constexpr bool is_all_any_op = 
         std::is_same_v<OpType<T>, AllOp<T>> ||
         std::is_same_v<OpType<T>, AnyOp<T>>;
-    
+
+    // constexpr bool is_complex_type =
+    //     std::is_same_v<T, complex32_t> ||
+    //     std::is_same_v<T, complex64_t> ||
+    //     std::is_same_v<T, complex128_t>;
+
+    // if constexpr (is_complex_type) {
+    //     throw std::runtime_error(
+    //         "Comparison-based reduction operations (min, max, argmin, argmax) are not supported for complex types. "
+    //         "Complex numbers do not have a natural ordering. "
+    //         "Got: " + get_dtype_name(input.dtype())
+    //     );
+    // }
+
     if constexpr (is_all_any_op && !std::is_same_v<T, bool>) {
         // Convert non-Bool tensor to Bool tensor (0 → false, non-zero → true)
         Tensor bool_input = input.to_bool();  // You need to implement this
@@ -360,6 +438,21 @@ Tensor dispatch_reduction(const Tensor& input, const std::vector<int64_t>& norma
         std::is_same_v<T, double> ||
         std::is_same_v<T, float16_t> ||
         std::is_same_v<T, bfloat16_t>;
+    
+    
+    
+    [[maybe_unused]] constexpr bool is_comparison_op =
+        std::is_same_v<OpType<T>, MinOp<T>> ||
+        std::is_same_v<OpType<T>, MaxOp<T>> ||
+        std::is_same_v<OpType<T>, NanMinOp<T>> ||
+        std::is_same_v<OpType<T>, NanMaxOp<T>> ||
+        std::is_same_v<OpType<T>, ArgMinOp<T>> ||
+        std::is_same_v<OpType<T>, ArgMaxOp<T>> ||
+        std::is_same_v<OpType<T>, NanArgMinOp<T>> ||
+        std::is_same_v<OpType<T>, NanArgMaxOp<T>>;
+    
+    // Block comparison operations on complex types - they don't have a natural ordering
+    
     
     // Block NaN operations on non-float types at compile time
     if constexpr (is_nan_op && !is_float_type) {
@@ -398,8 +491,10 @@ Tensor dispatch_reduction(const Tensor& input, const std::vector<int64_t>& norma
     } 
     else 
     {
+        // Use Op::AccT to get the correct accumulator type (e.g., bool for AllOp/AnyOp)
+        using Op = OpType<T>;
         Shape output_shape = detail::calculate_output_shape(input.shape().dims, normalized_axes, keepdim);
-        return reduce_kernel<T, OpType, T>(input, normalized_axes, output_shape);
+        return reduce_kernel<T, OpType, typename Op::AccT>(input, normalized_axes, output_shape);
     }
 }
 
@@ -409,7 +504,18 @@ Tensor dispatch_reduction(const Tensor& input, const std::vector<int64_t>& norma
 
 template <typename T, template <typename> class SumOpType>
 Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& normalized_axes, bool keepdim, cudaStream_t stream) {//✨✨✨
-    
+    // constexpr bool is_complex_type =
+    //     std::is_same_v<T, complex32_t> ||
+    //     std::is_same_v<T, complex64_t> ||
+    //     std::is_same_v<T, complex128_t>;
+
+    // if constexpr (is_complex_type) {
+    //     throw std::runtime_error(
+    //         "statistical operations are not supported for complex types for now"
+            
+    //         "Got: " + get_dtype_name(input.dtype())
+    //     );
+    // }
     // ✅ CRITICAL: Validate NaN-aware mean operations
     constexpr bool is_nan_sum = std::is_same_v<SumOpType<T>, NanSumOp<T>>;
     constexpr bool is_float_type = 
@@ -518,7 +624,7 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
     T* sum_data = sum_result.data<T>();
     
     // ✅ FIX: For NaN-aware mean, count only non-NaN values
-    SumT divisor;
+    [[maybe_unused]] SumT divisor;
     if constexpr (is_nan_sum) {
         // Count non-NaN values in the input tensor
         const T* input_data = input.data<T>();
@@ -567,13 +673,14 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
                 int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
                 T input_value = input_data[input_lin_idx];
                 
+                
                 // Check if value is not NaN
                 if constexpr (std::is_same_v<T, float16_t> || std::is_same_v<T, bfloat16_t>) {
                     if (!std::isnan(static_cast<float>(input_value))) {
                         valid_count++;
                     }
                 } else {
-                    if (!std::isnan(input_value)) {
+                    if (!safe_isnan(input_value)) {
                         valid_count++;
                     }
                 }
@@ -587,7 +694,12 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
         for (int64_t i = 0; i < static_cast<int64_t>(sum_result.numel()); ++i) {
             if (valid_counts[i] > 0) {
                 SumT val = static_cast<SumT>(sum_data[i]);
-                val /= static_cast<SumT>(valid_counts[i]);  // Divide by non-NaN count
+                // Handle complex types specially to avoid constructor ambiguity
+                if constexpr (std::is_same_v<SumT, complex32_t> || std::is_same_v<SumT, complex64_t> || std::is_same_v<SumT, complex128_t>) {
+                    val /= SumT(static_cast<double>(valid_counts[i]), 0.0);
+                } else {
+                    val /= static_cast<SumT>(valid_counts[i]);  // Divide by non-NaN count
+                }
                 
                 if constexpr (std::is_same_v<T, float16_t>) {
                     sum_data[i] = static_cast<T>(static_cast<float>(val));
@@ -601,7 +713,6 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
                 if constexpr (std::is_same_v<T, float16_t>) {
                     sum_data[i] = static_cast<T>(std::nanf(""));
                 } else if constexpr (std::is_same_v<T, bfloat16_t>) {
-                    sum_data[i] = static_cast<T>(std::nanf(""));
                 } else {
                     sum_data[i] = std::numeric_limits<T>::quiet_NaN();
                 }
@@ -610,7 +721,12 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
         
     } else {
         // Regular mean: divide by total reduced count
-        divisor = static_cast<SumT>(reduced_count);
+        SumT divisor;
+        if constexpr (std::is_same_v<SumT, complex32_t> || std::is_same_v<SumT, complex64_t> || std::is_same_v<SumT, complex128_t>) {
+            divisor = SumT(static_cast<double>(reduced_count), 0.0);
+        } else {
+            divisor = static_cast<SumT>(reduced_count);
+        }
         
         #pragma omp parallel for
         for (int64_t i = 0; i < static_cast<int64_t>(sum_result.numel()); ++i) {
@@ -671,6 +787,17 @@ Tensor dispatch_variance_kernel(const Tensor& input,
              "reduce_var: Bool dtype not supported for statistical operations."
         );
     }
+    // constexpr bool is_complex_type =
+    //     std::is_same_v<T, complex32_t> ||
+    //     std::is_same_v<T, complex64_t> ||
+    //     std::is_same_v<T, complex128_t>;
+    // if constexpr (is_complex_type) {
+    //     throw std::runtime_error(
+    //         "statistical operations are not supported for complex types for now"
+            
+    //         "Got: " + get_dtype_name(input.dtype())
+    //     );
+    // }
     constexpr bool is_nan_aware = std::is_same_v<VarianceOpType<T>, NanVarianceOp<T>>;
     
     constexpr bool is_float_type = 
@@ -765,7 +892,7 @@ Tensor dispatch_variance_kernel(const Tensor& input,
     // ✅ STEP 4: Compute sum of squared deviations in parallel
     #pragma omp parallel for
     for (int64_t output_index = 0; output_index < num_slices; ++output_index) {
-        AccT accumulator = 0;
+        AccT accumulator = AccT(0.0f);
         int64_t valid_count = 0;  // Only used for NaN-aware variance
         
         // Calculate output coordinates
@@ -876,12 +1003,16 @@ Tensor dispatch_variance_kernel(const Tensor& input,
         
         // Compute final variance
         AccT variance;
-        if (std::isnan(accumulator)) {
+        if (safe_isnan(accumulator)) {
             variance = accumulator;
         } else if (divisor <= 0) {
             variance = std::numeric_limits<AccT>::quiet_NaN();
         } else {
-            variance = accumulator / static_cast<AccT>(divisor);
+            if constexpr (std::is_same_v<AccT, complex32_t> || std::is_same_v<AccT, complex64_t> || std::is_same_v<AccT, complex128_t>) {
+                variance = accumulator / AccT(static_cast<double>(divisor), 0.0);
+            } else {
+                variance = accumulator / static_cast<AccT>(divisor);
+            }
         }
         
         // ✅ STEP 6: Convert back to output type
@@ -980,16 +1111,58 @@ Tensor dispatch_variance_kernel(const Tensor& input,
                 }
             }
             
-            // Compute mean
-            if (valid_count > 0) {
-                AccT mean_val = accumulator / static_cast<AccT>(valid_count);
-                
-                // Convert back to output type
-                if constexpr (std::is_same_v<T, float16_t>) {
-                    output_data[output_index] = static_cast<T>(static_cast<float>(mean_val));
-                } else if constexpr (std::is_same_v<T, bfloat16_t>) {
-                    output_data[output_index] = static_cast<T>(static_cast<float>(mean_val));
+             template <typename OutputCppT>
+    OutputCppT safe_cast_for_count(int64_t count) {
+        if constexpr (std::is_same_v<OutputCppT, complex32_t> || 
+                      std::is_same_v<OutputCppT, complex64_t> || 
+                      std::is_same_v<OutputCppT, complex128_t>) {
+            // For complex types, cast to double first to avoid ambiguity
+            return OutputCppT(static_cast<double>(count), 0.0);
+        } else {
+            return static_cast<OutputCppT>(count);
+        }
+    }            
+                // Compute mean
+                if (valid_count > 0) {
+                    AccT mean_val = accumulator / static_cast<AccT>(valid_count);
+                    
+                    // Convert back to output type
+                    if constexpr (std::is_same_v<T, float16_t>) {
+                        output_data[output_index] = static_cast<T>(static_cast<float>(mean_val));
+                    } else if constexpr (std::is_same_v<T, bfloat16_t>) {
+                        output_data[output_index] = static_cast<T>(static_cast<float>(mean_val));
+                    } else {
+                        output_data[output_index] = static_cast<T>(mean_val);
+                    }
                 } else {
+                    // All values were NaN
+                    output_data[output_index] = static_cast<T>(std::nanf(""));
+                }
+            }
+            
+            return output;
+            
+        } else {
+            // Regular mean: use reduce_kernel for sum, then divide
+            Tensor sum_result = reduce_kernel<T, SumOpType, AccT>(input, normalized_axes, output_shape);
+            
+            using SumT = typename std::conditional<
+                should_use_double_accumulation<T>(),
+                double,  
+                T        
+            >::type;
+            
+            T* sum_data = sum_result.data<T>();
+            const SumT divisor = static_cast<SumT>(reduced_count);
+            
+            #pragma omp parallel for
+            for (int64_t i = 0; i < static_cast<int64_t>(sum_result.numel()); ++i) {
+                SumT val = static_cast<SumT>(sum_data[i]);
+                val /= divisor;
+
+                if constexpr (std::is_same_v<T, float16_t>) {
+                    sum_data[i] = static_cast<T>(static_cast<float>(val));
+                } else if constexpr (std::is_same_v<T, bfloat16_t>) {
                     output_data[output_index] = static_cast<T>(mean_val);
                 }
             } else {

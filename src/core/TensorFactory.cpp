@@ -54,7 +54,7 @@ Tensor Tensor::zeros(Shape shape, TensorOptions opts) {
         // CPU implementation - handles all 7 types automatically
         dispatch_by_dtype(opts.dtype, [&](auto dummy) {
             using T = decltype(dummy);
-            tensor.fill(T(0));
+            tensor.fill(T(0.0f));
         });
     } else {
         // GPU implementation - optimized with cudaMemset
@@ -75,7 +75,7 @@ Tensor Tensor::ones(Shape shape, TensorOptions opts) {
         // CPU implementation - handles all 7 types automatically
         // dispatch_by_dtype(opts.dtype, [&](auto dummy) {
         //     using T = decltype(dummy);
-        //     tensor.fill(T(1));
+        //     tensor.fill(T(1.0f));
         // });
         dispatch_by_dtype(opts.dtype, [&](auto dummy) {
             using T = decltype(dummy);
@@ -83,7 +83,7 @@ Tensor Tensor::ones(Shape shape, TensorOptions opts) {
                 // Special handling for bool: ones = true
                 tensor.fill(true);
             } else {
-                tensor.fill(T(1));
+                tensor.fill(T(1.0f));
             }
         });
     } else {
@@ -96,7 +96,7 @@ Tensor Tensor::ones(Shape shape, TensorOptions opts) {
                 // For bool on GPU, use memset with 1
                 cudaMemset(tensor.data(), 1, tensor.numel());
             } else {
-                std::vector<T> ones_data(tensor.numel(), T(1));
+                std::vector<T> ones_data(tensor.numel(), T(1.0f));
                 cudaMemcpy(tensor.data(), ones_data.data(),
                           tensor.numel() * sizeof(T), cudaMemcpyHostToDevice);
             }

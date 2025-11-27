@@ -1,6 +1,7 @@
 #include "core/Tensor.h"
 #include "core/TensorDispatch.h"
 #include "device/DeviceTransfer.h"
+#include "dtype/DtypeTraits.h"
 
 namespace OwnTensor
 {
@@ -8,6 +9,16 @@ namespace OwnTensor
         // Edge Case: If types are the same, just return a clone
         if (new_dtype == this->dtype_) {
             return this->clone();
+        }
+
+        // ✅ Validation: Prevent invalid complex/scalar conversions
+        bool src_is_complex = is_complex(this->dtype_);
+        bool dst_is_complex = is_complex(new_dtype);
+        if (src_is_complex != dst_is_complex) {
+            throw std::runtime_error(
+                "Cannot convert between complex and non-complex types. " +
+                get_dtype_name(this->dtype_) + " -> " + get_dtype_name(new_dtype)
+            );
         }
 
         // 1. Create the destination tensor on the SAME device
@@ -38,10 +49,33 @@ namespace OwnTensor
                         using DstType = decltype(dst_type_placeholder);
                         auto* dst_data = reinterpret_cast<DstType*>(dst_untyped_ptr);
 
-                        // The core conversion loop
-                        for (size_t i = 0; i < n; ++i) {
-                            dst_data[i] = static_cast<DstType>(src_data[i]);
+                        // Compile-time check: both must be complex or both must be non-complex
+                        constexpr bool src_is_complex = 
+                            std::is_same_v<SrcType, complex32_t> ||
+                            std::is_same_v<SrcType, complex64_t> ||
+                            std::is_same_v<SrcType, complex128_t>;
+                        
+                        constexpr bool dst_is_complex = 
+                            std::is_same_v<DstType, complex32_t> ||
+                            std::is_same_v<DstType, complex64_t> ||
+                            std::is_same_v<DstType, complex128_t>;
+
+                        if constexpr (src_is_complex == dst_is_complex) {
+                            // Valid conversion: both complex or both non-complex
+                            for (size_t i = 0; i < n; ++i) {
+                                if constexpr (src_is_complex) {
+                                    // Manual complex-to-complex conversion by accessing components
+                                    dst_data[i] = DstType(
+                                        static_cast<decltype(dst_data[i].real())>(src_data[i].real()),
+                                        static_cast<decltype(dst_data[i].imag())>(src_data[i].imag())
+                                    );
+                                } else {
+                                    // Non-complex types can use static_cast
+                                    dst_data[i] = static_cast<DstType>(src_data[i]);
+                                }
+                            }
                         }
+                        // If compile-time check fails, this branch won't be instantiated
                     });
                 });
                 
@@ -68,10 +102,33 @@ namespace OwnTensor
                     using DstType = decltype(dst_type_placeholder);
                     auto* dst_data = reinterpret_cast<DstType*>(dst_untyped_ptr);
 
-                    // The core conversion loop
-                    for (size_t i = 0; i < n; ++i) {
-                        dst_data[i] = static_cast<DstType>(src_data[i]);
+                    // Compile-time check: both must be complex or both must be non-complex
+                    constexpr bool src_is_complex = 
+                        std::is_same_v<SrcType, complex32_t> ||
+                        std::is_same_v<SrcType, complex64_t> ||
+                        std::is_same_v<SrcType, complex128_t>;
+                    
+                    constexpr bool dst_is_complex = 
+                        std::is_same_v<DstType, complex32_t> ||
+                        std::is_same_v<DstType, complex64_t> ||
+                        std::is_same_v<DstType, complex128_t>;
+
+                    if constexpr (src_is_complex == dst_is_complex) {
+                        // Valid conversion: both complex or both non-complex
+                        for (size_t i = 0; i < n; ++i) {
+                            if constexpr (src_is_complex) {
+                                // Manual complex-to-complex conversion by accessing components
+                                dst_data[i] = DstType(
+                                    static_cast<decltype(dst_data[i].real())>(src_data[i].real()),
+                                    static_cast<decltype(dst_data[i].imag())>(src_data[i].imag())
+                                );
+                            } else {
+                                // Non-complex types can use static_cast
+                                dst_data[i] = static_cast<DstType>(src_data[i]);
+                            }
+                        }
                     }
+                    // If compile-time check fails, this branch won't be instantiated
                 });
             });
         }

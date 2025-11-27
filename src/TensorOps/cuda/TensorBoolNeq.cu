@@ -6,6 +6,7 @@
 
 #include "ops/TensorOps.cuh"
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
 
 namespace OwnTensor
 {   

@@ -1,4 +1,5 @@
 #include "core/Tensor.h"
+#include "core/TensorDispatch.h"
 #include "ops/helpers/BroadcastUtils.h"
 #include <stdexcept>
 #include <vector>

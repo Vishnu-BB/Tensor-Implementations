@@ -71,6 +71,27 @@ __device__ inline __nv_bfloat16 shfl_down(__nv_bfloat16 val, unsigned int delta)
     return __shfl_down_sync(0xffffffff, val, delta, 32);
 }
 
+// ✅ Specialization for complex32_t (32-bit, cast to int)
+__device__ inline complex32_t shfl_down(complex32_t val, unsigned int delta) {
+    int* ptr = reinterpret_cast<int*>(&val);
+    int res = __shfl_down_sync(0xffffffff, *ptr, delta, 32);
+    return *reinterpret_cast<complex32_t*>(&res);
+}
+
+// ✅ Specialization for complex64_t (64-bit, cast to unsigned long long)
+__device__ inline complex64_t shfl_down(complex64_t val, unsigned int delta) {
+    unsigned long long* ptr = reinterpret_cast<unsigned long long*>(&val);
+    unsigned long long res = __shfl_down_sync(0xffffffff, *ptr, delta, 32);
+    return *reinterpret_cast<complex64_t*>(&res);
+}
+
+// ✅ Specialization for complex128_t (128-bit, shuffle components)
+__device__ inline complex128_t shfl_down(complex128_t val, unsigned int delta) {
+    double r = __shfl_down_sync(0xffffffff, val.real_, delta, 32);
+    double i = __shfl_down_sync(0xffffffff, val.imag_, delta, 32);
+    return complex128_t(r, i);
+}
+
 // ═══════════════════════════════════════════════════════════
 // WARP-LEVEL REDUCTION (USES GPU INTRINSICS)
 // ═══════════════════════════════════════════════════════════
@@ -148,7 +169,21 @@ __global__ void reduce_kernel(
     AccumulatorType* shared = reinterpret_cast<AccumulatorType*>(shared_mem);
 
     for (int64_t output_index = blockIdx.x; output_index < num_slices; output_index += gridDim.x) {
-        
+        //Calculate actual output tensor dimensions 
+        int output_ndim = rank_preserved ? ndim : 0;
+        if (!rank_preserved) {
+            // Count how many dimensions are NOT being reduced
+            for (int dim = 0; dim < ndim; ++dim) {
+                bool is_reduced = false;
+                for (int ax = 0; ax < num_axes; ++ax) {
+                    if (normalized_axes[ax] == dim) {
+                        is_reduced = true;
+                        break;
+                    }
+                }
+                if (!is_reduced) output_ndim++;
+            }
+        }
         // Initialize accumulator
         AccumulatorType accumulator;
         if constexpr (is_integer_sum) {
@@ -164,12 +199,12 @@ __global__ void reduce_kernel(
         // Calculate output coordinates
         int64_t out_coords[10];
         int64_t temp = output_index;
-        for (int d = num_reduced_dims - 1; d >= 0; --d) {
+        for (int d = output_ndim - 1; d >= 0; --d) {
             out_coords[d] = temp % output_dims[d];
             temp /= output_dims[d];
         }
 
-        // ✅ ACCUMULATION LOOP (USES GPU INTRINSICS FOR HALF TYPES)
+        //  ACCUMULATION LOOP (USES GPU INTRINSICS FOR HALF TYPES)
         for (int64_t i = threadIdx.x; i < reduced_count; i += blockDim.x) {
             // Calculate input coordinates
             int64_t slice_coords[10];
@@ -292,10 +327,25 @@ __global__ void reduce_index_kernel(
 
     for (int64_t output_index = blockIdx.x; output_index < num_slices; output_index += gridDim.x) {
         ValueIndexType accumulator = op.identity();
-
+ 
+        //  Calculate actual output tensor dimensions 
+        int output_ndim = rank_preserved ? ndim : 0;
+        if (!rank_preserved) {
+            // Count how many dimensions are NOT being reduced
+            for (int dim = 0; dim < ndim; ++dim) {
+                bool is_reduced = false;
+                for (int ax = 0; ax < num_axes; ++ax) {
+                    if (normalized_axes[ax] == dim) {
+                        is_reduced = true;
+                        break;
+                    }
+                }
+                if (!is_reduced) output_ndim++;
+            }
+        }
         int64_t out_coords[10];
         int64_t temp = output_index;
-        for (int d = num_reduced_dims - 1; d >= 0; --d) {
+        for (int d = output_ndim - 1; d >= 0; --d) {
             out_coords[d] = temp % output_dims[d];
             temp /= output_dims[d];
         }
@@ -394,23 +444,50 @@ __global__ void reduce_mean_kernel(
 {
     constexpr bool is_nan_aware = std::is_same_v<SumOpType<T>, detail::NanSumOp<T>>;
     constexpr bool is_half = std::is_same_v<T, __half> || std::is_same_v<T, __nv_bfloat16>;
+    constexpr bool is_complex = std::is_same_v<T, complex32_t> || std::is_same_v<T, complex64_t> || std::is_same_v<T, complex128_t>;
+
+    // Determine accumulator type: complex types use complex128_t (or complex64_t for complex32_t), others use double
+    using AccT = typename std::conditional_t<
+        is_complex,
+        typename std::conditional_t<std::is_same_v<T, complex32_t>, complex64_t, complex128_t>,
+        double
+    >;
 
     extern __shared__ char shared_mem[];
-    double* shared_acc = reinterpret_cast<double*>(shared_mem);
+    AccT* shared_acc = reinterpret_cast<AccT*>(shared_mem);
     int64_t* shared_count = reinterpret_cast<int64_t*>(shared_acc + blockDim.x / 32);
 
     for (int64_t output_index = blockIdx.x; output_index < num_slices; output_index += gridDim.x) {
-        double accumulator = 0.0;
+        AccT accumulator;
+        if constexpr (is_complex) {
+            accumulator = AccT(0.0, 0.0);
+        } else {
+            accumulator = AccT(0);
+        }
         int64_t valid_count = 0;
-
+//   Calculate actual output tensor dimensions 
+        int output_ndim = rank_preserved ? ndim : 0;
+        if (!rank_preserved) {
+            // Count how many dimensions are NOT being reduced
+            for (int dim = 0; dim < ndim; ++dim) {
+                bool is_reduced = false;
+                for (int ax = 0; ax < num_axes; ++ax) {
+                    if (normalized_axes[ax] == dim) {
+                        is_reduced = true;
+                        break;
+                    }
+                }
+                if (!is_reduced) output_ndim++;
+            }
+        }
         int64_t out_coords[10];
         int64_t temp = output_index;
-        for (int d = num_reduced_dims - 1; d >= 0; --d) {
+        for (int d = output_ndim - 1; d >= 0; --d) {
             out_coords[d] = temp % output_dims[d];
             temp /= output_dims[d];
         }
 
-        // ✅ ACCUMULATION WITH GPU INTRINSICS
+        //  ACCUMULATION WITH GPU INTRINSICS
         for (int64_t i = threadIdx.x; i < reduced_count; i += blockDim.x) {
             int64_t slice_coords[10];
             int64_t tmp = i;
@@ -447,21 +524,27 @@ __global__ void reduce_mean_kernel(
 
             T input_value = input_data[input_lin_idx];
 
-            // ✅ CONVERT USING GPU INTRINSICS
-            double val_d;
+            //  CONVERT USING GPU INTRINSICS
+            AccT val_acc;
             if constexpr (is_half) {
-                val_d = static_cast<double>(to_float(input_value));
+                val_acc = static_cast<double>(to_float(input_value));
             } else {
-                val_d = static_cast<double>(input_value);
+                val_acc = static_cast<AccT>(input_value);
             }
 
             if constexpr (is_nan_aware) {
-                if (!isnan(val_d)) {
-                    accumulator += val_d;
+                bool is_val_nan;
+                if constexpr (is_complex) {
+                    is_val_nan = isnan(val_acc);
+                } else {
+                    is_val_nan = std::isnan(val_acc);
+                }
+                if (!is_val_nan) {
+                    accumulator += val_acc;
                     valid_count++;
                 }
             } else {
-                accumulator += val_d;
+                accumulator += val_acc;
             }
         }
 
@@ -471,7 +554,7 @@ __global__ void reduce_mean_kernel(
 
         #pragma unroll
         for (int offset = 16; offset > 0; offset /= 2) {
-            double other_acc = shfl_down(accumulator, offset);
+            AccT other_acc = shfl_down(accumulator, offset);
             accumulator += other_acc;
             
             if constexpr (is_nan_aware) {
@@ -487,14 +570,22 @@ __global__ void reduce_mean_kernel(
         __syncthreads();
 
         if (wid == 0) {
-            accumulator = (threadIdx.x < blockDim.x / 32) ? shared_acc[lane] : 0.0;
+            if (threadIdx.x < blockDim.x / 32) {
+                accumulator = shared_acc[lane];
+            } else {
+                if constexpr (is_complex) {
+                    accumulator = AccT(0.0, 0.0);
+                } else {
+                    accumulator = AccT(0);
+                }
+            }
             if constexpr (is_nan_aware) {
                 valid_count = (threadIdx.x < blockDim.x / 32) ? shared_count[lane] : 0;
             }
 
             #pragma unroll
             for (int offset = 16; offset > 0; offset /= 2) {
-                double other_acc = shfl_down(accumulator, offset);
+                AccT other_acc = shfl_down(accumulator, offset);
                 accumulator += other_acc;
                 
                 if constexpr (is_nan_aware) {
@@ -505,19 +596,42 @@ __global__ void reduce_mean_kernel(
         }
 
         if (threadIdx.x == 0) {
-            double mean_val;
+            AccT mean_val;
             
             if constexpr (is_nan_aware) {
-                mean_val = (valid_count == 0) ? 
-                    __longlong_as_double(0x7ff8000000000000ULL) : 
-                    accumulator / static_cast<double>(valid_count);
+                if (valid_count == 0) {
+                     if constexpr (is_complex) {
+                         // Create NaN for complex
+                         float nan_val = nanf("");
+                         mean_val = AccT(nan_val, nan_val);
+                     } else {
+                         mean_val = __longlong_as_double(0x7ff8000000000000ULL);
+                     }
+                } else {
+                    mean_val = accumulator / static_cast<double>(valid_count);
+                }
             } else {
                 mean_val = accumulator / static_cast<double>(reduced_count);
             }
 
-            // ✅ CONVERT BACK USING GPU INTRINSICS
+            //  ✅ CONVERT BACK USING GPU INTRINSICS
             if constexpr (is_half) {
                 output_data[output_index] = from_float<OutputT>(static_cast<float>(mean_val));
+            } else if constexpr (is_complex) {
+                // Handle complex type conversion (e.g., complex128_t -> complex64_t)
+                if constexpr (std::is_same_v<AccT, OutputT>) {
+                    output_data[output_index] = mean_val;
+                } else {
+                    // Convert between complex types (e.g., complex128_t to complex64_t)
+                    output_data[output_index] = OutputT(static_cast<typename std::conditional<
+                        std::is_same_v<OutputT, complex32_t>, float,
+                        typename std::conditional<std::is_same_v<OutputT, complex64_t>, float, double>::type
+                    >::type>(mean_val.real()), 
+                    static_cast<typename std::conditional<
+                        std::is_same_v<OutputT, complex32_t>, float,
+                        typename std::conditional<std::is_same_v<OutputT, complex64_t>, float, double>::type
+                    >::type>(mean_val.imag()));
+                }
             } else {
                 output_data[output_index] = static_cast<OutputT>(mean_val);
             }
@@ -549,6 +663,7 @@ __global__ void reduce_variance_kernel(
 {
     // ✅ Determine if this is NaN-aware variance
     constexpr bool is_nan_aware = std::is_same_v<VarianceOpType<T>, detail::NanVarianceOp<T>>;
+    constexpr bool is_complex_out = std::is_same_v<OutputT, complex32_t> || std::is_same_v<OutputT, complex64_t> || std::is_same_v<OutputT, complex128_t>;
     
     // ✅ Use MeanT for accumulation (matches mean tensor type)
     using AccT = typename std::conditional<
@@ -556,6 +671,9 @@ __global__ void reduce_variance_kernel(
         float,
         MeanT  // ✅ Use mean type for accumulator
     >::type;
+    
+    // ✅ Check if AccT is complex (must come after AccT is defined)
+    constexpr bool is_complex_acc = std::is_same_v<AccT, complex32_t> || std::is_same_v<AccT, complex64_t> || std::is_same_v<AccT, complex128_t>;
     
     extern __shared__ char shared_mem[];
     AccT* shared_acc = reinterpret_cast<AccT*>(shared_mem);
@@ -642,7 +760,12 @@ __global__ void reduce_variance_kernel(
             mean_val = static_cast<AccT>(mean_data[mean_index]);
         }
         
-        AccT accumulator = 0;
+        AccT accumulator;
+        if constexpr (is_complex_acc) {
+            accumulator = AccT(0.0, 0.0);
+        } else {
+            accumulator = AccT(0);
+        }
         int64_t valid_count = 0;
         
         // Accumulate squared deviations
@@ -691,14 +814,33 @@ __global__ void reduce_variance_kernel(
             }
             
             if constexpr (is_nan_aware) {
-                if (!isnan(val)) {
+                bool is_val_nan;
+                if constexpr (is_complex_acc) {
+                    is_val_nan = isnan(val);
+                } else {
+                    is_val_nan = std::isnan(val);
+                }
+                if (!is_val_nan) {
                     AccT diff = val - mean_val;
                     accumulator += diff * diff;
                     valid_count++;
                 }
             } else {
-                if (isnan(val) || isnan(mean_val)) {
-                    accumulator = nanf("");
+                bool val_is_nan, mean_is_nan;
+                if constexpr (is_complex_acc) {
+                    val_is_nan = isnan(val);
+                    mean_is_nan = isnan(mean_val);
+                } else {
+                    val_is_nan = std::isnan(val);
+                    mean_is_nan = std::isnan(mean_val);
+                }
+                if (val_is_nan || mean_is_nan) {
+                    if constexpr (is_complex_acc) {
+                         float n = nanf("");
+                         accumulator = AccT(n, n);
+                    } else {
+                        accumulator = nanf("");
+                    }
                 } else {
                     AccT diff = val - mean_val;
                     accumulator += diff * diff;
@@ -728,7 +870,15 @@ __global__ void reduce_variance_kernel(
         __syncthreads();
         
         if (wid == 0) {
-            accumulator = (threadIdx.x < blockDim.x / 32) ? shared_acc[lane] : AccT(0);
+            if (threadIdx.x < blockDim.x / 32) {
+                accumulator = shared_acc[lane];
+            } else {
+                if constexpr (is_complex_acc) {
+                    accumulator = AccT(0.0, 0.0);
+                } else {
+                    accumulator = AccT(0);
+                }
+            }
             if constexpr (is_nan_aware) {
                 valid_count = (threadIdx.x < blockDim.x / 32) ? shared_count[lane] : 0;
             }
@@ -754,11 +904,20 @@ __global__ void reduce_variance_kernel(
                 divisor = reduced_count - correction;
             }
             
-            if (isnan(accumulator)) {
+            bool acc_is_nan;
+            if constexpr (is_complex_acc) {
+                acc_is_nan = isnan(accumulator);
+            } else {
+                acc_is_nan = std::isnan(accumulator);
+            }
+            if (acc_is_nan) {
                 if constexpr (std::is_same_v<OutputT, __half>) {
                     output_data[output_index] = __float2half(nanf(""));
                 } else if constexpr (std::is_same_v<OutputT, __nv_bfloat16>) {
                     output_data[output_index] = __float2bfloat16(nanf(""));
+                } else if constexpr (is_complex_out) {
+                     float n = nanf("");
+                     output_data[output_index] = OutputT(n, n);
                 } else {
                     output_data[output_index] = static_cast<OutputT>(nanf(""));
                 }
@@ -768,12 +927,15 @@ __global__ void reduce_variance_kernel(
                     output_data[output_index] = __float2half(nanf(""));
                 } else if constexpr (std::is_same_v<OutputT, __nv_bfloat16>) {
                     output_data[output_index] = __float2bfloat16(nanf(""));
+                } else if constexpr (is_complex_out) {
+                     float n = nanf("");
+                     output_data[output_index] = OutputT(n, n);
                 } else {
                     output_data[output_index] = static_cast<OutputT>(nanf(""));
                 }
             } else {
                 // Compute variance
-                AccT variance = accumulator / static_cast<AccT>(divisor);
+                AccT variance = accumulator / AccT(static_cast<double>(divisor));
                 
                 if constexpr (std::is_same_v<OutputT, __half> || std::is_same_v<OutputT, __nv_bfloat16>) {
                     output_data[output_index] = from_float<OutputT>(static_cast<float>(variance));
