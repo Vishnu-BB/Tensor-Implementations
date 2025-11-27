@@ -734,113 +734,113 @@ void sign_in_cpu_wrap(Tensor& input_tensor) {
     generic_unary_in_cpu(input_tensor, float_fn, double_fn);
 }
 
-// ============================================================================
-// POWER
-// ============================================================================
+// // ============================================================================
+// // POWER
+// // ============================================================================
 
-// Integer exponent version
-Tensor power_out_cpu_wrap(const Tensor& input_tensor, int exponent) {
-    auto float_fn = [exponent](float x) { 
-        return safe_pow(x, static_cast<float>(exponent)); 
-    };
-    auto double_fn = [exponent](double x) { 
-        return safe_pow(x, static_cast<double>(exponent)); 
-    };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
-                                  float_fn, double_fn);
-}
+// // Integer exponent version
+// Tensor power_out_cpu_wrap(const Tensor& input_tensor, int exponent) {
+//     auto float_fn = [exponent](float x) { 
+//         return safe_pow(x, static_cast<float>(exponent)); 
+//     };
+//     auto double_fn = [exponent](double x) { 
+//         return safe_pow(x, static_cast<double>(exponent)); 
+//     };
+//     return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
+//                                   float_fn, double_fn);
+// }
 
-void power_in_cpu_wrap(Tensor& input_tensor, int exponent) {
-    if (input_tensor.dtype() == Dtype::Bool) {
-        throw std::runtime_error(
-            "NotImplementedError: \"pow\" not implemented for 'Bool'"
-        );
-    }
+// void power_in_cpu_wrap(Tensor& input_tensor, int exponent) {
+//     if (input_tensor.dtype() == Dtype::Bool) {
+//         throw std::runtime_error(
+//             "NotImplementedError: \"pow\" not implemented for 'Bool'"
+//         );
+//     }
     
-    if(exponent < 0) {
-        throw std::runtime_error(
-            "Inplace power operations with negative exponents are not supported. "
-            "Use out-of-place power operation instead."
-        );
-    }
-    auto float_fn = [exponent](float x) { 
-        return safe_pow(x, static_cast<float>(exponent)); 
-    };
-    auto double_fn = [exponent](double x) { 
-        return safe_pow(x, static_cast<double>(exponent)); 
-    };
-    generic_unary_in_cpu(input_tensor, float_fn, double_fn);
-}
+//     if(exponent < 0) {
+//         throw std::runtime_error(
+//             "Inplace power operations with negative exponents are not supported. "
+//             "Use out-of-place power operation instead."
+//         );
+//     }
+//     auto float_fn = [exponent](float x) { 
+//         return safe_pow(x, static_cast<float>(exponent)); 
+//     };
+//     auto double_fn = [exponent](double x) { 
+//         return safe_pow(x, static_cast<double>(exponent)); 
+//     };
+//     generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+// }
 
-// Float exponent version
-Tensor power_out_cpu_wrap(const Tensor& input_tensor, float exponent) {
-    auto float_fn = [exponent](float x) { 
-        return safe_pow(x, exponent); 
-    };
-    auto double_fn = [exponent](double x) { 
-        return safe_pow(x, static_cast<double>(exponent)); 
-    };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
-                                  float_fn, double_fn);
-}
+// // Float exponent version
+// Tensor power_out_cpu_wrap(const Tensor& input_tensor, float exponent) {
+//     auto float_fn = [exponent](float x) { 
+//         return safe_pow(x, exponent); 
+//     };
+//     auto double_fn = [exponent](double x) { 
+//         return safe_pow(x, static_cast<double>(exponent)); 
+//     };
+//     return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
+//                                   float_fn, double_fn);
+// }
 
-void power_in_cpu_wrap(Tensor& input_tensor, float exponent) {
-    if (input_tensor.dtype() == Dtype::Bool) {
-        throw std::runtime_error(
-            "NotImplementedError: \"pow\" not implemented for 'Bool'"
-        );
-    }
-    if(is_float(input_tensor.dtype())) {
-        auto float_fn = [exponent](float x) { 
-            return safe_pow(x, static_cast<float>(exponent)); 
-        };
-        auto double_fn = [exponent](double x) { 
-            return safe_pow(x, static_cast<double>(exponent)); 
-        };
-        generic_unary_in_cpu(input_tensor, float_fn, double_fn);
-    }
-    else{
-        throw std::runtime_error(
-            "Inplace power operations is accepted only for int exponent values. "
-            "Use out-of-place power operation instead."
-        );
-    } 
-}
+// void power_in_cpu_wrap(Tensor& input_tensor, float exponent) {
+//     if (input_tensor.dtype() == Dtype::Bool) {
+//         throw std::runtime_error(
+//             "NotImplementedError: \"pow\" not implemented for 'Bool'"
+//         );
+//     }
+//     if(is_float(input_tensor.dtype())) {
+//         auto float_fn = [exponent](float x) { 
+//             return safe_pow(x, static_cast<float>(exponent)); 
+//         };
+//         auto double_fn = [exponent](double x) { 
+//             return safe_pow(x, static_cast<double>(exponent)); 
+//         };
+//         generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+//     }
+//     else{
+//         throw std::runtime_error(
+//             "Inplace power operations is accepted only for int exponent values. "
+//             "Use out-of-place power operation instead."
+//         );
+//     } 
+// }
 
-// Double exponent version
-Tensor power_out_cpu_wrap(const Tensor& input_tensor, double exponent) {
-    auto float_fn = [exponent](float x) { 
-        return safe_pow(x, static_cast<float>(exponent)); 
-    };
-    auto double_fn = [exponent](double x) { 
-        return safe_pow(x, exponent); 
-    };
-    return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
-                                  float_fn, double_fn);
-}
+// // Double exponent version
+// Tensor power_out_cpu_wrap(const Tensor& input_tensor, double exponent) {
+//     auto float_fn = [exponent](float x) { 
+//         return safe_pow(x, static_cast<float>(exponent)); 
+//     };
+//     auto double_fn = [exponent](double x) { 
+//         return safe_pow(x, exponent); 
+//     };
+//     return generic_unary_out_cpu(input_tensor, get_promoted_dtype(input_tensor.dtype()), 
+//                                   float_fn, double_fn);
+// }
 
-void power_in_cpu_wrap(Tensor& input_tensor, double exponent) {
-    if (input_tensor.dtype() == Dtype::Bool) {
-        throw std::runtime_error(
-            "NotImplementedError: \"pow\" not implemented for 'Bool'"
-        );
-    }
-    if(is_float(input_tensor.dtype())) {
-        auto float_fn = [exponent](float x) { 
-            return safe_pow(x, static_cast<float>(exponent)); 
-        };
-        auto double_fn = [exponent](double x) { 
-            return safe_pow(x, static_cast<double>(exponent)); 
-        };
-        generic_unary_in_cpu(input_tensor, float_fn, double_fn);
-    }
-    else{
-        throw std::runtime_error(
-            "Inplace power operations is accepted only for int exponent values. "
-            "Use out-of-place power operation instead."
-        );
-    } 
+// void power_in_cpu_wrap(Tensor& input_tensor, double exponent) {
+//     if (input_tensor.dtype() == Dtype::Bool) {
+//         throw std::runtime_error(
+//             "NotImplementedError: \"pow\" not implemented for 'Bool'"
+//         );
+//     }
+//     if(is_float(input_tensor.dtype())) {
+//         auto float_fn = [exponent](float x) { 
+//             return safe_pow(x, static_cast<float>(exponent)); 
+//         };
+//         auto double_fn = [exponent](double x) { 
+//             return safe_pow(x, static_cast<double>(exponent)); 
+//         };
+//         generic_unary_in_cpu(input_tensor, float_fn, double_fn);
+//     }
+//     else{
+//         throw std::runtime_error(
+//             "Inplace power operations is accepted only for int exponent values. "
+//             "Use out-of-place power operation instead."
+//         );
+//     } 
     
-}
+// }
 
 } // namespace OwnTensor
