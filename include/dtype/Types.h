@@ -1,5 +1,5 @@
 #pragma once
-
+#include <stdio.h>
 #include <cstdint>
 #include <limits>
 #include <cmath>
@@ -17,6 +17,9 @@
     #ifndef __host__
         #define __host__
     #endif
+#else
+    // When compiling with CUDA, include FP8 header
+    #include <cuda_fp8.h>
 #endif
 namespace OwnTensor {
 
@@ -116,15 +119,17 @@ __device__ __host__ inline float float16_to_float(uint16_t h) {
             // Zero (preserve sign)
             u = sign;
         } else {
-            // Denormal number
-            float f = static_cast<float>(frac) / 1024.0f;
+            // Denormal number - use CLZ for fast normalization (like FP8!)
+            // Normalize: shift left until MSB is 1, then adjust exponent
             #ifdef __CUDA_ARCH__
-            f = ldexpf(f, -14);
+                uint32_t shift = __clz(frac) - 21; // 32 - 10 (mantissa) - 1 (implicit)
             #else
-            f = ::std::ldexp(f, -14);
+                uint32_t shift = __builtin_clz(frac) - 21;
             #endif
-            if (sign) f = -f;
-            ::std::memcpy(&u, &f, sizeof(f));
+            
+            frac <<= shift; // Normalize mantissa
+            uint32_t exp_val = 127 - 15 - shift + 1; // Adjust bias
+            u = sign | (exp_val << 23) | ((frac & 0x3FF) << 13);
         }
     } else if (exp == 0x1F) {
         // Infinity or NaN
@@ -136,7 +141,7 @@ __device__ __host__ inline float float16_to_float(uint16_t h) {
     }
     
     float f;
-    std::memcpy(&f, &u, sizeof(f));
+    ::std::memcpy(&f, &u, sizeof(f));
     return f;
 }
 
@@ -182,6 +187,180 @@ __device__ __host__ inline uint16_t float_to_float16(float f) {
 } // namespace detail
 
 // ==================================================================================
+// FP8 CONVERSION FUNCTIONS (8-bit Floating Point)
+// ==================================================================================
+
+namespace detail {
+
+//----E4M3FN Conversions (4 exponent bits, 3 mantissa bits) ----
+// Format: [S:1][E:4][M:3], bias=7, max~448, NaN when all exp+mantissa bits=1
+// Based on PyTorch's implementation from c10/util/Float8_e4m3fn.h
+
+__device__ __host__ inline float e4m3fn_to_float(uint8_t input) {
+    /*
+     * Extend fp8 E4M3FN to 32 bits and shift to upper part:
+     *      +---+----+---+-----------------------------+
+     *      | S |EEEE|MMM|0000 0000 0000 0000 0000 0000|
+     *      +---+----+---+-----------------------------+
+     * Bits  31 27-30 24-26          0-23
+     */
+    const uint32_t w = (uint32_t)input << 24;
+    const uint32_t sign = w & UINT32_C(0x80000000);
+    const uint32_t nonsign = w & UINT32_C(0x7FFFFFFF);
+    
+    /*
+     * Count leading zeros to detect denormals
+     * Normal numbers have a 1 in high bits, denormals need normalization
+     */
+    #ifdef __CUDA_ARCH__
+        uint32_t renorm_shift = __clz(nonsign);
+    #else
+        uint32_t renorm_shift = nonsign != 0 ? __builtin_clz(nonsign) : 32;
+    #endif
+    renorm_shift = renorm_shift > 4 ? renorm_shift - 4 : 0;
+    
+    /*
+     * Create NaN mask: if all exponent and mantissa bits = 1,
+     * overflow sets this to FP32 NaN pattern
+     */
+    const int32_t inf_nan_mask =
+        ((int32_t)(nonsign + 0x01000000) >> 8) & INT32_C(0x7F800000);
+    
+    /*
+     * Zero mask: if input was zero, this becomes 0xFFFFFFFF
+     */
+    const int32_t zero_mask = (int32_t)(nonsign - 1) >> 31;
+    
+    /*
+     * Main conversion:
+     * 1. Normalize by shifting left
+     * 2. Shift right by 4 to align exponent/mantissa
+     * 3. Add bias adjustment (0x78 = 120 = FP32 bias - E4M3 bias)
+     * 4. Handle NaN and zero cases
+     */
+    uint32_t result = sign |
+        ((((nonsign << renorm_shift >> 4) + ((0x78 - renorm_shift) << 23)) |
+          inf_nan_mask) &
+         ~zero_mask);
+    
+    float f;
+    ::std::memcpy(&f, &result, sizeof(f));
+    return f;
+}
+
+__device__ __host__ inline uint8_t float_to_e4m3fn(float f) {
+    /*
+     * Binary representation of 480.0f (first value not representable):
+     * E4M3FN: 0 1111 111
+     * FP32:   0 10000111 11100000000000000000000
+     */
+    constexpr uint32_t fp8_max = UINT32_C(1087) << 20;
+    
+    /*
+     * Magic number for denormal conversion
+     * ((127 - 7) + (23 - 3) + 1) = 141
+     */
+    constexpr uint32_t denorm_mask = UINT32_C(141) << 23;
+    
+    uint32_t f_bits;
+    ::std::memcpy(&f_bits, &f, sizeof(f));
+    
+    const uint32_t sign = f_bits & UINT32_C(0x80000000);
+    f_bits ^= sign;  // Remove sign for processing
+    
+    uint8_t result = 0u;
+    
+    if (f_bits >= fp8_max) {
+        // Overflow or NaN -> saturate to NaN (E4M3FN has no infinity)
+        result = 0x7F;
+    } else if (f_bits < (UINT32_C(121) << 23)) {
+        // Smaller than 2^(-6), smallest E4M3FN normal -> denormal
+        uint32_t f_bits_tmp;
+        float f_tmp = *reinterpret_cast<float*>(&f_bits);
+        float denorm_magic = *reinterpret_cast<const float*>(&denorm_mask);
+        f_tmp += denorm_magic;
+        ::std::memcpy(&f_bits_tmp, &f_tmp, sizeof(f_tmp));
+        result = static_cast<uint8_t>(f_bits_tmp - denorm_mask);
+    } else {
+        // Normal value: round to nearest even
+        uint8_t mant_odd = (f_bits >> 20) & 1;
+        f_bits += ((uint32_t)(7 - 127) << 23) + 0x7FFFF;  // Adjust exponent + round bias
+        f_bits += mant_odd;  // Round to even
+        result = static_cast<uint8_t>(f_bits >> 20);
+    }
+    
+    result |= static_cast<uint8_t>(sign >> 24);
+    return result;
+}
+
+// ---- E5M2 Conversions (5 exponent bits, 2 mantissa bits) ----
+// Format: [S:1][E:5][M:2], bias=15, max~57344, supports infinity
+// Uses clever FP16 intermediate shortcut (same exponent width!)
+
+__device__ __host__ inline float e5m2_to_float(uint8_t input) {
+    /*
+     * E5M2 and FP16 have SAME exponent layout (5 bits)!
+     * Just shift E5M2 left by 8 bits to create valid FP16,
+     * then use existing FP16→FP32 converter
+     * 
+     * E5M2:  [S:1][EEEEE:5][MM:2]
+     * Shift: [S:1][EEEEE:5][MM:2][00000000:8]
+     * FP16:  [S:1][EEEEE:5][MMMMMMMMMM:10]
+     *        ^^^^^ ^^^^^^^ ^^^^^^^^^^^
+     *        Same! Same!   Padded with zeros
+     */
+    uint16_t fp16_bits = static_cast<uint16_t>(input) << 8;
+    return float16_to_float(fp16_bits);  // Reuse existing converter!
+}
+
+__device__ __host__ inline uint8_t float_to_e5m2(float f) {
+    /*
+     * Binary representation of 65536.0f (first overflow value):
+     * E5M2: 0 11111 00
+     * FP32: 0 10001111 00000000000000000000000
+     */
+    constexpr uint32_t fp8_max = UINT32_C(143) << 23;
+    constexpr uint32_t fp32_inf = UINT32_C(255) << 23;
+    
+    /*
+     * Denormal magic: ((127 - 15) + (23 - 2) + 1) = 134
+     */
+    constexpr uint32_t denorm_mask = UINT32_C(134) << 23;
+    
+    uint32_t f_bits;
+    ::std::memcpy(&f_bits, &f, sizeof(f));
+    
+    const uint32_t sign = f_bits & UINT32_C(0x80000000);
+    f_bits ^= sign;
+    
+    uint8_t result = 0u;
+    
+    if (f_bits >= fp8_max) {
+        // NaN or overflow
+        result = f_bits > fp32_inf ? UINT8_C(0x7F) : UINT8_C(0x7C);  // NaN : Inf
+    } else if (f_bits < (UINT32_C(113) << 23)) {
+        // Smaller than 2^(-14), smallest E5M2 normal -> denormal
+        uint32_t f_bits_tmp;
+        float f_tmp = *reinterpret_cast<float*>(&f_bits);
+        float denorm_magic = *reinterpret_cast<const float*>(&denorm_mask);
+        f_tmp += denorm_magic;
+        ::std::memcpy(&f_bits_tmp, &f_tmp, sizeof(f_tmp));
+        result = static_cast<uint8_t>(f_bits_tmp - denorm_mask);
+    } else {
+        // Normal value: round to nearest even
+        uint32_t mant_odd = (f_bits >> 21) & 1;
+        f_bits += ((uint32_t)(15 - 127) << 23) + 0xFFFFF;  // Adjust exponent + round bias
+        f_bits += mant_odd;  // Round to even
+        result = static_cast<uint8_t>(f_bits >> 21);
+    }
+    
+    result |= static_cast<uint8_t>(sign >> 24);
+    return result;
+}
+
+} // namespace detail
+
+// ==================================================================================
 // CUSTOM STRUCT DEFINITIONS FOR BF16/FP16 - FULLY DEVICE-COMPATIBLE
 // ==================================================================================
 
@@ -196,13 +375,13 @@ struct bfloat16_t {
 
     // ---- Constructors ----
     __device__ __host__ bfloat16_t() : raw_bits(0) {}
-    __device__ __host__ explicit bfloat16_t(float val) { raw_bits = detail::float_to_bfloat16(val); }
+    __device__ __host__ bfloat16_t(float val) { raw_bits = detail::float_to_bfloat16(val); }
     __device__ __host__ bfloat16_t(const bfloat16_t& other) : raw_bits(other.raw_bits) {}
 
     template <typename U, typename = ::std::enable_if_t<
         ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
     >>    
-    __device__ __host__ explicit bfloat16_t(U val) {
+    __device__ __host__ bfloat16_t(U val) {
         raw_bits = detail::float_to_bfloat16(static_cast<float>(val));
     }
 
@@ -284,6 +463,24 @@ struct bfloat16_t {
         *this = bfloat16_t(static_cast<float>(*this) / static_cast<float>(other));
         return *this;
     }
+
+    // ---- Ambiguity Resolvers (Friend Operators) ----
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(const bfloat16_t& lhs, T rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(T lhs, const bfloat16_t& rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(const bfloat16_t& lhs, T rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(T lhs, const bfloat16_t& rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
 };
 
 /**
@@ -297,13 +494,13 @@ struct float16_t {
 
     // ---- Constructors ----
     __device__ __host__ float16_t() : raw_bits(0) {}
-    __device__ __host__ explicit float16_t(float val) { raw_bits = detail::float_to_float16(val); }
+    __device__ __host__ float16_t(float val) { raw_bits = detail::float_to_float16(val); }
     __device__ __host__ float16_t(const float16_t& other) : raw_bits(other.raw_bits) {}
 
     template <typename U, typename = ::std::enable_if_t<
         ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
     >>
-    __device__ __host__ explicit float16_t(U val) {
+    __device__ __host__ float16_t(U val) {
         raw_bits = detail::float_to_float16(static_cast<float>(val));
     }
 
@@ -385,6 +582,268 @@ struct float16_t {
         *this = float16_t(static_cast<float>(*this) / static_cast<float>(other));
         return *this;
     }
+
+    // ---- Ambiguity Resolvers (Friend Operators) ----
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(const float16_t& lhs, T rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(T lhs, const float16_t& rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(const float16_t& lhs, T rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(T lhs, const float16_t& rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+};
+
+// ==================================================================================
+// FP8 TYPES (8-bit Floating Point for Deep Learning)
+// ==================================================================================
+
+/**
+ * @brief Float8 E4M3FN (4 exponent bits, 3 mantissa bits, Finite + NaN)
+ * Format: Sign(1) + Exponent(4) + Mantissa(3), Bias=7
+ * Range: ~±448, NaN when all exp+mantissa bits = 1
+ * Use case: Forward pass in training (weights, activations)
+ */
+struct float8_e4m3fn_t {
+    uint8_t raw_bits;  // 8-bit storage
+    
+    // ---- Constructors ----
+    __device__ __host__ float8_e4m3fn_t() : raw_bits(0) {}
+    __device__ __host__ float8_e4m3fn_t(float val) { 
+        raw_bits = detail::float_to_e4m3fn(val); 
+    }
+    __device__ __host__ float8_e4m3fn_t(const float8_e4m3fn_t& other) : raw_bits(other.raw_bits) {}
+    
+    template <typename U, typename = ::std::enable_if_t<
+        ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
+    >>
+    __device__ __host__ float8_e4m3fn_t(U val) {
+        raw_bits = detail::float_to_e4m3fn(static_cast<float>(val));
+    }
+    
+    // ---- Conversion to float ----
+    __device__ __host__ operator float() const { 
+        return detail::e4m3fn_to_float(raw_bits); 
+    }
+    
+    // ---- Assignment Operators ----
+    __device__ __host__ float8_e4m3fn_t& operator=(float val) {
+        raw_bits = detail::float_to_e4m3fn(val);
+        return *this;
+    }
+    
+    __device__ __host__ float8_e4m3fn_t& operator=(const float8_e4m3fn_t& other) {
+        raw_bits = other.raw_bits;
+        return *this;
+    }
+    
+    template <typename U, typename = ::std::enable_if_t<
+        ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
+    >>
+    __device__ __host__ float8_e4m3fn_t& operator=(U val) {
+        raw_bits = detail::float_to_e4m3fn(static_cast<float>(val));
+        return *this;
+    }
+    
+    // ---- Comparison Operators ----
+    __device__ __host__ bool operator>(const float8_e4m3fn_t& other) const {
+        return static_cast<float>(*this) > static_cast<float>(other);
+    }
+    __device__ __host__ bool operator<(const float8_e4m3fn_t& other) const {
+        return static_cast<float>(*this) < static_cast<float>(other);
+    }
+    __device__ __host__ bool operator>=(const float8_e4m3fn_t& other) const {
+        return static_cast<float>(*this) >= static_cast<float>(other);
+    }
+    __device__ __host__ bool operator<=(const float8_e4m3fn_t& other) const {
+        return static_cast<float>(*this) <= static_cast<float>(other);
+    }
+    __device__ __host__ bool operator==(const float8_e4m3fn_t& other) const {
+        return raw_bits == other.raw_bits;
+    }
+    __device__ __host__ bool operator!=(const float8_e4m3fn_t& other) const {
+        return raw_bits != other.raw_bits;
+    }
+    
+    // ---- Arithmetic Operators ----
+    __device__ __host__ float8_e4m3fn_t operator+(const float8_e4m3fn_t& other) const {
+        return float8_e4m3fn_t(static_cast<float>(*this) + static_cast<float>(other));
+    }
+    __device__ __host__ float8_e4m3fn_t operator-(const float8_e4m3fn_t& other) const {
+        return float8_e4m3fn_t(static_cast<float>(*this) - static_cast<float>(other));
+    }
+    __device__ __host__ float8_e4m3fn_t operator*(const float8_e4m3fn_t& other) const {
+        return float8_e4m3fn_t(static_cast<float>(*this) * static_cast<float>(other));
+    }
+    __device__ __host__ float8_e4m3fn_t operator/(const float8_e4m3fn_t& other) const {
+        return float8_e4m3fn_t(static_cast<float>(*this) / static_cast<float>(other));
+    }
+    __device__ __host__ float8_e4m3fn_t operator-() const {
+        return float8_e4m3fn_t(-static_cast<float>(*this));
+    }
+    
+    __device__ __host__ float8_e4m3fn_t& operator+=(const float8_e4m3fn_t& other) {
+        *this = float8_e4m3fn_t(static_cast<float>(*this) + static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e4m3fn_t& operator-=(const float8_e4m3fn_t& other) {
+        *this = float8_e4m3fn_t(static_cast<float>(*this) - static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e4m3fn_t& operator*=(const float8_e4m3fn_t& other) {
+        *this = float8_e4m3fn_t(static_cast<float>(*this) * static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e4m3fn_t& operator/=(const float8_e4m3fn_t& other) {
+        *this = float8_e4m3fn_t(static_cast<float>(*this) / static_cast<float>(other));
+        return *this;
+    }
+
+    // ---- Ambiguity Resolvers (Friend Operators) ----
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(const float8_e4m3fn_t& lhs, T rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(T lhs, const float8_e4m3fn_t& rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(const float8_e4m3fn_t& lhs, T rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(T lhs, const float8_e4m3fn_t& rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+};
+
+/**
+ * @brief Float8 E5M2 (5 exponent bits, 2 mantissa bits)
+ * Format: Sign(1) + Exponent(5) + Mantissa(2), Bias=15
+ * Range: ~±57344, supports infinity
+ * Use case: Backward pass gradients
+ */
+struct float8_e5m2_t {
+    uint8_t raw_bits;  // 8-bit storage
+    
+    // ---- Constructors ----
+    __device__ __host__ float8_e5m2_t() : raw_bits(0) {}
+    __device__ __host__ float8_e5m2_t(float val) { 
+        raw_bits = detail::float_to_e5m2(val); 
+    }
+    __device__ __host__ float8_e5m2_t(const float8_e5m2_t& other) : raw_bits(other.raw_bits) {}
+    
+    template <typename U, typename = ::std::enable_if_t<
+        ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
+    >>
+    __device__ __host__ float8_e5m2_t(U val) {
+        raw_bits = detail::float_to_e5m2(static_cast<float>(val));
+    }
+    
+    // ---- Conversion to float ----
+    __device__ __host__ operator float() const { 
+        return detail::e5m2_to_float(raw_bits); 
+    }
+    
+    // ---- Assignment Operators ----
+    __device__ __host__ float8_e5m2_t& operator=(float val) {
+        raw_bits = detail::float_to_e5m2(val);
+        return *this;
+    }
+    
+    __device__ __host__ float8_e5m2_t& operator=(const float8_e5m2_t& other) {
+        raw_bits = other.raw_bits;
+        return *this;
+    }
+    
+    template <typename U, typename = ::std::enable_if_t<
+        ::std::is_arithmetic_v<U> && !::std::is_same_v<std::decay_t<U>, float>
+    >>
+    __device__ __host__ float8_e5m2_t& operator=(U val) {
+        raw_bits = detail::float_to_e5m2(static_cast<float>(val));
+        return *this;
+    }
+    
+    // ---- Comparison Operators ----
+    __device__ __host__ bool operator>(const float8_e5m2_t& other) const {
+        return static_cast<float>(*this) > static_cast<float>(other);
+    }
+    __device__ __host__ bool operator<(const float8_e5m2_t& other) const {
+        return static_cast<float>(*this) < static_cast<float>(other);
+    }
+    __device__ __host__ bool operator>=(const float8_e5m2_t& other) const {
+        return static_cast<float>(*this) >= static_cast<float>(other);
+    }
+    __device__ __host__ bool operator<=(const float8_e5m2_t& other) const {
+        return static_cast<float>(*this) <= static_cast<float>(other);
+    }
+    __device__ __host__ bool operator==(const float8_e5m2_t& other) const {
+        return raw_bits == other.raw_bits;
+    }
+    __device__ __host__ bool operator!=(const float8_e5m2_t& other) const {
+        return raw_bits != other.raw_bits;
+    }
+    
+    // ---- Arithmetic Operators ----
+    __device__ __host__ float8_e5m2_t operator+(const float8_e5m2_t& other) const {
+        return float8_e5m2_t(static_cast<float>(*this) + static_cast<float>(other));
+    }
+    __device__ __host__ float8_e5m2_t operator-(const float8_e5m2_t& other) const {
+        return float8_e5m2_t(static_cast<float>(*this) - static_cast<float>(other));
+    }
+    __device__ __host__ float8_e5m2_t operator*(const float8_e5m2_t& other) const {
+        return float8_e5m2_t(static_cast<float>(*this) * static_cast<float>(other));
+    }
+    __device__ __host__ float8_e5m2_t operator/(const float8_e5m2_t& other) const {
+        return float8_e5m2_t(static_cast<float>(*this) / static_cast<float>(other));
+    }
+    __device__ __host__ float8_e5m2_t operator-() const {
+        return float8_e5m2_t(-static_cast<float>(*this));
+    }
+    
+    __device__ __host__ float8_e5m2_t& operator+=(const float8_e5m2_t& other) {
+        *this = float8_e5m2_t(static_cast<float>(*this) + static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e5m2_t& operator-=(const float8_e5m2_t& other) {
+        *this = float8_e5m2_t(static_cast<float>(*this) - static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e5m2_t& operator*=(const float8_e5m2_t& other) {
+        *this = float8_e5m2_t(static_cast<float>(*this) * static_cast<float>(other));
+        return *this;
+    }
+    __device__ __host__ float8_e5m2_t& operator/=(const float8_e5m2_t& other) {
+        *this = float8_e5m2_t(static_cast<float>(*this) / static_cast<float>(other));
+        return *this;
+    }
+
+    // ---- Ambiguity Resolvers (Friend Operators) ----
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(const float8_e5m2_t& lhs, T rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator==(T lhs, const float8_e5m2_t& rhs) {
+        return static_cast<float>(lhs) == static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(const float8_e5m2_t& lhs, T rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
+    template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+    __device__ __host__ friend bool operator!=(T lhs, const float8_e5m2_t& rhs) {
+        return static_cast<float>(lhs) != static_cast<float>(rhs);
+    }
 };
 
     // ==================================================================================
@@ -420,6 +879,146 @@ struct float16_t {
     inline bfloat16_t round(bfloat16_t a) { return bfloat16_t(std::round(static_cast<float>(a))); }
     inline bfloat16_t pow(bfloat16_t a, bfloat16_t b) { return bfloat16_t(std::pow(static_cast<float>(a), static_cast<float>(b))); }
     inline bfloat16_t hypot(bfloat16_t a, bfloat16_t b) { return bfloat16_t(std::hypot(static_cast<float>(a), static_cast<float>(b))); }
+
+    // ---- Float8 E4M3FN Math ----
+    inline float8_e4m3fn_t abs(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::abs(static_cast<float>(a))); }
+    inline float8_e4m3fn_t sqrt(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::sqrt(static_cast<float>(a))); }
+    inline float8_e4m3fn_t exp(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::exp(static_cast<float>(a))); }
+    inline float8_e4m3fn_t log(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::log(static_cast<float>(a))); }
+    inline float8_e4m3fn_t sin(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::sin(static_cast<float>(a))); }
+    inline float8_e4m3fn_t cos(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::cos(static_cast<float>(a))); }
+    inline float8_e4m3fn_t tan(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::tan(static_cast<float>(a))); }
+    inline float8_e4m3fn_t tanh(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::tanh(static_cast<float>(a))); }
+    inline float8_e4m3fn_t floor(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::floor(static_cast<float>(a))); }
+    inline float8_e4m3fn_t ceil(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::ceil(static_cast<float>(a))); }
+    inline float8_e4m3fn_t round(float8_e4m3fn_t a) { return float8_e4m3fn_t(std::round(static_cast<float>(a))); }
+    inline float8_e4m3fn_t pow(float8_e4m3fn_t a, float8_e4m3fn_t b) { return float8_e4m3fn_t(std::pow(static_cast<float>(a), static_cast<float>(b))); }
+
+    // ---- Float8 E5M2 Math ----
+    inline float8_e5m2_t abs(float8_e5m2_t a) { return float8_e5m2_t(std::abs(static_cast<float>(a))); }
+    inline float8_e5m2_t sqrt(float8_e5m2_t a) { return float8_e5m2_t(std::sqrt(static_cast<float>(a))); }
+    inline float8_e5m2_t exp(float8_e5m2_t a) { return float8_e5m2_t(std::exp(static_cast<float>(a))); }
+    inline float8_e5m2_t log(float8_e5m2_t a) { return float8_e5m2_t(std::log(static_cast<float>(a))); }
+    inline float8_e5m2_t sin(float8_e5m2_t a) { return float8_e5m2_t(std::sin(static_cast<float>(a))); }
+    inline float8_e5m2_t cos(float8_e5m2_t a) { return float8_e5m2_t(std::cos(static_cast<float>(a))); }
+    inline float8_e5m2_t tan(float8_e5m2_t a) { return float8_e5m2_t(std::tan(static_cast<float>(a))); }
+    inline float8_e5m2_t tanh(float8_e5m2_t a) { return float8_e5m2_t(std::tanh(static_cast<float>(a))); }
+    inline float8_e5m2_t floor(float8_e5m2_t a) { return float8_e5m2_t(std::floor(static_cast<float>(a))); }
+    inline float8_e5m2_t ceil(float8_e5m2_t a) { return float8_e5m2_t(std::ceil(static_cast<float>(a))); }
+    inline float8_e5m2_t round(float8_e5m2_t a) { return float8_e5m2_t(std::round(static_cast<float>(a))); }
+    inline float8_e5m2_t pow(float8_e5m2_t a, float8_e5m2_t b) { return float8_e5m2_t(std::pow(static_cast<float>(a), static_cast<float>(b))); }
+
+// ==================================================================================
+// CUDA NATIVE FP8 OPERATOR OVERLOADS
+// ==================================================================================
+// CUDA native types (__nv_fp8_e4m3, __nv_fp8_e5m2) have conversion intrinsics
+// but NO arithmetic operators. We provide them here.
+
+#ifdef __CUDACC__
+
+// ---- E4M3 Arithmetic Operators ----
+__device__ __host__ inline __nv_fp8_e4m3 operator+(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return __nv_fp8_e4m3(static_cast<float>(a) + static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e4m3 operator-(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return __nv_fp8_e4m3(static_cast<float>(a) - static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e4m3 operator*(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return __nv_fp8_e4m3(static_cast<float>(a) * static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e4m3 operator/(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return __nv_fp8_e4m3(static_cast<float>(a) / static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e4m3 operator-(const __nv_fp8_e4m3& a) {
+    return __nv_fp8_e4m3(-static_cast<float>(a));
+}
+
+// ---- E4M3 Compound Assignment ----
+__device__ __host__ inline __nv_fp8_e4m3& operator+=(__nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    a = a + b; return a;
+}
+__device__ __host__ inline __nv_fp8_e4m3& operator-=(__nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    a = a - b; return a;
+}
+__device__ __host__ inline __nv_fp8_e4m3& operator*=(__nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    a = a * b; return a;
+}
+__device__ __host__ inline __nv_fp8_e4m3& operator/=(__nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    a = a / b; return a;
+}
+
+// ---- E5M2 Arithmetic Operators ----
+__device__ __host__ inline __nv_fp8_e5m2 operator+(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return __nv_fp8_e5m2(static_cast<float>(a) + static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e5m2 operator-(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return __nv_fp8_e5m2(static_cast<float>(a) - static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e5m2 operator*(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return __nv_fp8_e5m2(static_cast<float>(a) * static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e5m2 operator/(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return __nv_fp8_e5m2(static_cast<float>(a) / static_cast<float>(b));
+}
+__device__ __host__ inline __nv_fp8_e5m2 operator-(const __nv_fp8_e5m2& a) {
+    return __nv_fp8_e5m2(-static_cast<float>(a));
+}
+
+// ---- E5M2 Compound Assignment ----
+__device__ __host__ inline __nv_fp8_e5m2& operator+=(__nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    a = a + b; return a;
+}
+__device__ __host__ inline __nv_fp8_e5m2& operator-=(__nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    a = a - b; return a;
+}
+__device__ __host__ inline __nv_fp8_e5m2& operator*=(__nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    a = a * b; return a;
+}
+__device__ __host__ inline __nv_fp8_e5m2& operator/=(__nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    a = a / b; return a;
+}
+
+// ---- E4M3 Comparison Operators ----
+__device__ __host__ inline bool operator==(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) == static_cast<float>(b);
+}
+__device__ __host__ inline bool operator!=(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) != static_cast<float>(b);
+}
+__device__ __host__ inline bool operator<(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) < static_cast<float>(b);
+}
+__device__ __host__ inline bool operator>(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) > static_cast<float>(b);
+}
+__device__ __host__ inline bool operator<=(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) <= static_cast<float>(b);
+}
+__device__ __host__ inline bool operator>=(const __nv_fp8_e4m3& a, const __nv_fp8_e4m3& b) {
+    return static_cast<float>(a) >= static_cast<float>(b);
+}
+
+// ---- E5M2 Comparison Operators ----
+__device__ __host__ inline bool operator==(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) == static_cast<float>(b);
+}
+__device__ __host__ inline bool operator!=(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) != static_cast<float>(b);
+}
+__device__ __host__ inline bool operator<(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) < static_cast<float>(b);
+}
+__device__ __host__ inline bool operator>(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) > static_cast<float>(b);
+}
+__device__ __host__ inline bool operator<=(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) <= static_cast<float>(b);
+}
+__device__ __host__ inline bool operator>=(const __nv_fp8_e5m2& a, const __nv_fp8_e5m2& b) {
+    return static_cast<float>(a) >= static_cast<float>(b);
+}
+
+#endif // __CUDACC__
 
 } // namespace OwnTensor
 
@@ -530,7 +1129,8 @@ namespace OwnTensor {
             : real_(float16_t(r)), imag_(float16_t(i)) {}
         __device__ __host__ explicit complex32_t(double r, double i = 0.0)
             : real_(float16_t(static_cast<float>(r))), imag_(float16_t(static_cast<float>(i))) {}
-
+        __device__ __host__ explicit complex32_t(int r ,int i =0)
+            : real_(float16_t(static_cast<float>(r))), imag_(float16_t(static_cast<float>(i))){}
         // ---- Accessor Methods ----
         __device__ __host__ float16_t real() const { return real_; }
         __device__ __host__ float16_t imag() const { return imag_; }
@@ -669,7 +1269,9 @@ struct complex64_t {
     // Scalar constructors for common types
     __device__ __host__ explicit complex64_t(double r, double i = 0.0)
         : real_(static_cast<float>(r)), imag_(static_cast<float>(i)) {}
-    
+     __device__ __host__ explicit complex64_t(int r ,int i =0)
+            : real_(static_cast<float>(r)), imag_(static_cast<float>(i)){}
+
     __host__ explicit complex64_t(const std::complex<float>& c)
         : real_(c.real()), imag_(c.imag()) {}
     __device__ __host__ complex64_t(const complex64_t& other)
@@ -778,7 +1380,8 @@ struct complex128_t {
     // Constructors
     __device__ __host__ complex128_t() : real_(0.0), imag_(0.0) {}
     __device__ __host__ complex128_t(double r, double i = 0.0) : real_(r), imag_(i) {}
-    
+     __device__ __host__ explicit complex128_t(int r ,int i =0)
+            : real_(static_cast<double>(r)), imag_(static_cast<double>(i)){}
     // Scalar constructor for int
     __host__ explicit complex128_t(const std::complex<double>& c)
         : real_(c.real()), imag_(c.imag()) {}

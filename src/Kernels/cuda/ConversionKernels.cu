@@ -113,7 +113,8 @@ template void convert_to_bool_cuda<uint64_t>(const uint64_t*, bool*, int64_t, cu
 template void convert_to_bool_cuda<complex32_t>(const complex32_t*, bool*, int64_t, cudaStream_t);
 template void convert_to_bool_cuda<complex64_t>(const complex64_t*, bool*, int64_t, cudaStream_t);
 template void convert_to_bool_cuda<complex128_t>(const complex128_t*, bool*, int64_t, cudaStream_t);
-
+template void convert_to_bool_cuda<float8_e4m3fn_t>(const float8_e4m3fn_t*,bool*,int64_t,cudaStream_t);
+template void convert_to_bool_cuda<float8_e5m2_t>(const float8_e5m2_t*,bool*,int64_t,cudaStream_t);
 } // namespace OwnTensor
 
 // ============================================================================

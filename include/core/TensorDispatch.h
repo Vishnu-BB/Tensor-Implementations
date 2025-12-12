@@ -11,6 +11,7 @@
 #ifdef __CUDACC__
     #include <cuda_fp16.h>
     #include <cuda_bf16.h>
+    #include <cuda_fp8.h>  // FP8 native types (CUDA 11.8+)
 #endif
 #include "dtype/Types.h"
 
@@ -45,8 +46,11 @@ template<> struct DtypeToType<Dtype::Bool> { using type = bool;};
 
 // ✅ Half precision types - resolve based on compilation context
 #ifdef __CUDACC__
+    // CUDA compilation - use native CUDA types
     template<> struct DtypeToType<Dtype::Float16>  { using type = __half; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = __nv_bfloat16; };
+    template<> struct DtypeToType<Dtype::Float8_E4M3FN> { using type = __nv_fp8_e4m3; };
+    template<> struct DtypeToType<Dtype::Float8_E5M2> { using type = __nv_fp8_e5m2; };
     template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
     template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
     template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
@@ -54,6 +58,8 @@ template<> struct DtypeToType<Dtype::Bool> { using type = bool;};
     // CPU compilation - use custom types
     template<> struct DtypeToType<Dtype::Float16>  { using type = float16_t; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = bfloat16_t; };
+    template<> struct DtypeToType<Dtype::Float8_E4M3FN> { using type = float8_e4m3fn_t; };
+    template<> struct DtypeToType<Dtype::Float8_E5M2> { using type = float8_e5m2_t; };
     template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
     template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
     template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
@@ -70,6 +76,8 @@ static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
         case Dtype::Float64:  return f(typename DtypeToType<Dtype::Float64>::type{});
         case Dtype::Bfloat16: return f(typename DtypeToType<Dtype::Bfloat16>::type{});
         case Dtype::Float16:  return f(typename DtypeToType<Dtype::Float16>::type{});
+        case Dtype::Float8_E4M3FN: return f(typename DtypeToType<Dtype::Float8_E4M3FN>::type{});
+        case Dtype::Float8_E5M2:   return f(typename DtypeToType<Dtype::Float8_E5M2>::type{});
         case Dtype::Bool:   return f(typename DtypeToType<Dtype::Bool>::type{});
         case Dtype::UInt8: return f(typename DtypeToType<Dtype::UInt8>::type{});
         case Dtype::UInt16: return f(typename DtypeToType<Dtype::UInt16>::type{});

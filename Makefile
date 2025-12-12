@@ -9,7 +9,7 @@ LIBDIR := lib
 TARGET_A := $(LIBDIR)/libtensor.a
 TARGET_SO := $(LIBDIR)/libtensor.so
 
-CPPFLAGS = -Iinclude -I/usr/local/cuda/include -DWITH_CUDA
+CPPFLAGS = -Iinclude -I/usr/local/cuda/include -DWITH_CUDA 
 CXXFLAGS = -std=c++20 -fPIC -Wall -Wextra -g -fopenmp
 NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g --expt-relaxed-constexpr
 
