@@ -510,6 +510,8 @@ namespace OwnTensor
             case Dtype::Complex32: return dtype_traits<Dtype::Complex32>::size;
             case Dtype::Complex64: return dtype_traits<Dtype::Complex64>::size;
             case Dtype::Complex128: return dtype_traits<Dtype::Complex128>::size;
+            case Dtype::Float8_E4M3FN: return dtype_traits<Dtype::Float8_E4M3FN>::size;
+            case Dtype::Float8_E5M2: return dtype_traits<Dtype::Float8_E5M2>::size;
             default: throw std::runtime_error("Unsupported data type");
         }
     }
@@ -654,6 +656,13 @@ template uint64_t* Tensor::data<uint64_t>();
     template const complex128_t* Tensor::data<complex128_t>() const;
     template complex128_t* Tensor::data<complex128_t>();
 
+    //FP8 types
+    template const float8_e4m3fn_t* Tensor::data<float8_e4m3fn_t>() const;
+    template float8_e4m3fn_t* Tensor::data<float8_e4m3fn_t>();
+
+    template const float8_e5m2_t* Tensor::data<float8_e5m2_t>() const;
+    template float8_e5m2_t* Tensor::data<float8_e5m2_t>();
+
     // Explicit instantiations for set_data
     template void Tensor::set_data<bool>(const std::vector<bool>&);
     template void Tensor::set_data<int8_t>(const std::vector<int8_t>&);
@@ -671,7 +680,9 @@ template uint64_t* Tensor::data<uint64_t>();
     template void Tensor::set_data<complex32_t>(const std::vector<complex32_t>&);
     template void Tensor::set_data<complex64_t>(const std::vector<complex64_t>&);
     template void Tensor::set_data<complex128_t>(const std::vector<complex128_t>&);
-
+    template void Tensor::set_data<float8_e4m3fn_t>(const std::vector<float8_e4m3fn_t>&);
+    template void Tensor::set_data<float8_e5m2_t>(const std::vector<float8_e5m2_t>&);
+  
     // Explicit instantiations for fill
     template void Tensor::fill<bool>(bool);
     template void Tensor::fill<int16_t>(int16_t);
@@ -688,5 +699,6 @@ template uint64_t* Tensor::data<uint64_t>();
     template void Tensor::fill<complex32_t>(complex32_t);
     template void Tensor::fill<complex64_t>(complex64_t);
     template void Tensor::fill<complex128_t>(complex128_t);
-
+    template void Tensor::fill<float8_e4m3fn_t>(float8_e4m3fn_t) ;
+    template void Tensor::fill<float8_e5m2_t>(float8_e5m2_t);
 }

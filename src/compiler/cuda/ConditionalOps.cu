@@ -17,8 +17,14 @@ __global__ void k_where(const CondT* condition, const DataT* input,
                         const DataT* other, DataT* out, size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
          i < n; 
-         i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0.0f));
+         i += gridDim.x * blockDim.x) {
+        // Handle FP8 types that don't have operator!= by converting to float
+        bool cond;
+        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
+            cond = (static_cast<float>(condition[i]) != 0.0f);
+        } else {
+            cond = (condition[i] != static_cast<CondT>(0.0f));
+        }
         out[i] = cond ? input[i] : other[i];
     }
 }
@@ -30,8 +36,13 @@ __global__ void k_where_fp16(const CondT* condition, const __half* input,
                              size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
-         i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0.0f));
+         i += gridDim.x * blockDim.x) {
+        bool cond;
+        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
+            cond = (static_cast<float>(condition[i]) != 0.0f);
+        } else {
+            cond = (condition[i] != static_cast<CondT>(0.0f));
+        }
         out[i] = cond ? input[i] : other[i]; 
     }
 }
@@ -42,8 +53,13 @@ __global__ void k_where_bf16(const CondT* condition, const __nv_bfloat16* input,
                              size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
-         i += blockDim.x * gridDim.x) {
-        bool cond = (condition[i] != static_cast<CondT>(0.0f));
+         i += gridDim.x * blockDim.x) {
+        bool cond;
+        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
+            cond = (static_cast<float>(condition[i]) != 0.0f);
+        } else {
+            cond = (condition[i] != static_cast<CondT>(0.0f));
+        }
         out[i] = cond ? input[i] : other[i]; 
     }
 }

@@ -24,11 +24,15 @@ namespace cuda {
 template<typename T> __device__ float to_float(T val) { return static_cast<float>(val); }
 template<> __device__ float to_float(__half val) { return __half2float(val); }
 template<> __device__ float to_float(__nv_bfloat16 val) { return __bfloat162float(val); }
+template<> __device__ float to_float(__nv_fp8_e4m3 val) { return static_cast<float>(val); }
+template<> __device__ float to_float(__nv_fp8_e5m2 val) { return static_cast<float>(val); }
 
 // ---- From float conversion ----
 template<typename T> __device__ T from_float(float val) { return static_cast<T>(val); }
 template<> __device__ __half from_float(float val) { return __float2half(val); }
 template<> __device__ __nv_bfloat16 from_float(float val) { return __float2bfloat16(val); }
+template<> __device__ __nv_fp8_e4m3 from_float(float val) { return __nv_fp8_e4m3(val); }
+template<> __device__ __nv_fp8_e5m2 from_float(float val) { return __nv_fp8_e5m2(val); }
 
 // // ---- NaN check (use GPU intrinsics) ----
 // template<typename T> __device__ bool is_nan(T val) { return isnan(val); }
@@ -69,6 +73,36 @@ __device__ inline __half shfl_down(__half val, unsigned int delta) {
 // ✅ Specialization for __nv_bfloat16 (uses intrinsic shuffle)
 __device__ inline __nv_bfloat16 shfl_down(__nv_bfloat16 val, unsigned int delta) {
     return __shfl_down_sync(0xffffffff, val, delta, 32);
+}
+
+// ✅ Specialization for __nv_fp8_e4m3 (convert to float, shuffle, convert back)
+__device__ inline __nv_fp8_e4m3 shfl_down(__nv_fp8_e4m3 val, unsigned int delta) {
+    float f_val = static_cast<float>(val);
+    float shuffled = __shfl_down_sync(0xffffffff, f_val, delta, 32);
+    return __nv_fp8_e4m3(shuffled);
+}
+
+// ✅ Specialization for __nv_fp8_e5m2 (convert to float, shuffle, convert back)
+__device__ inline __nv_fp8_e5m2 shfl_down(__nv_fp8_e5m2 val, unsigned int delta) {
+    float f_val = static_cast<float>(val);
+    float shuffled = __shfl_down_sync(0xffffffff, f_val, delta, 32);
+    return __nv_fp8_e5m2(shuffled);
+}
+
+// ✅ Specialization for float8_e4m3fn_t (CPU type - shuffle raw bits)
+__device__ inline float8_e4m3fn_t shfl_down(float8_e4m3fn_t val, unsigned int delta) {
+    uint8_t raw = __shfl_down_sync(0xffffffff, val.raw_bits, delta, 32);
+    float8_e4m3fn_t result;
+    result.raw_bits = raw;
+    return result;
+}
+
+// ✅ Specialization for float8_e5m2_t (CPU type - shuffle raw bits)
+__device__ inline float8_e5m2_t shfl_down(float8_e5m2_t val, unsigned int delta) {
+    uint8_t raw = __shfl_down_sync(0xffffffff, val.raw_bits, delta, 32);
+    float8_e5m2_t result;
+    result.raw_bits = raw;
+    return result;
 }
 
 // ✅ Specialization for complex32_t (32-bit, cast to int)

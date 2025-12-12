@@ -140,6 +140,66 @@ namespace OwnTensor {
         set_data(source_data.data(), source_data.size());
     }
     
+    // --- Specialization for float8_e4m3fn_t ---
+    template <>
+    inline void Tensor::set_data<float8_e4m3fn_t>(const float8_e4m3fn_t* source_data, size_t count)
+    {
+        if (count != numel()) {
+            throw std::runtime_error("Data size does not match tensor size");
+        }
+        if (!is_same_type<float8_e4m3fn_t>(dtype_)) {
+            throw std::runtime_error("Datatype mismatch");
+        }
+
+        // Extract the raw 8-bit data into a contiguous array
+        std::vector<uint8_t> raw_data(count);
+        for (size_t i = 0; i < count; ++i) {
+            raw_data[i] = source_data[i].raw_bits;
+        }
+
+        // Copy the raw 8-bit integers to the tensor's memory
+        device::copy_memory(data_ptr_.get(), device_.device,
+                           raw_data.data(), Device::CPU,
+                           count * sizeof(uint8_t));
+    }
+    
+    // Specialization for vector<float8_e4m3fn_t>
+    template <>
+    inline void Tensor::set_data<float8_e4m3fn_t>(const std::vector<float8_e4m3fn_t>& source_data)
+    {
+        set_data(source_data.data(), source_data.size());
+    }
+    
+    // --- Specialization for float8_e5m2_t ---
+    template <>
+    inline void Tensor::set_data<float8_e5m2_t>(const float8_e5m2_t* source_data, size_t count)
+    {
+        if (count != numel()) {
+            throw std::runtime_error("Data size does not match tensor size");
+        }
+        if (!is_same_type<float8_e5m2_t>(dtype_)) {
+            throw std::runtime_error("Datatype mismatch");
+        }
+
+        // Extract the raw 8-bit data into a contiguous array
+        std::vector<uint8_t> raw_data(count);
+        for (size_t i = 0; i < count; ++i) {
+            raw_data[i] = source_data[i].raw_bits;
+        }
+
+        // Copy the raw 8-bit integers to the tensor's memory
+        device::copy_memory(data_ptr_.get(), device_.device,
+                           raw_data.data(), Device::CPU,
+                           count * sizeof(uint8_t));
+    }
+    
+    // Specialization for vector<float8_e5m2_t>
+    template <>
+    inline void Tensor::set_data<float8_e5m2_t>(const std::vector<float8_e5m2_t>& source_data)
+    {
+        set_data(source_data.data(), source_data.size());
+    }
+    
     template<>
     inline void Tensor::set_data<bool>(const bool* source_data, size_t count) {
         if (count != numel()) {

@@ -255,6 +255,22 @@ void dispatch_print_1d(std::ostream& os, Dtype dt, const void* data, size_t coun
             return print_1d_half(os, p, count, precision, opts, to_float);
         }
 
+        case Dtype::Float8_E4M3FN: {
+            const auto* p = reinterpret_cast<const float8_e4m3fn_t*>(data);
+            auto to_float = [](float8_e4m3fn_t fp8) -> float {
+                return detail::e4m3fn_to_float(fp8.raw_bits);
+            };
+            return print_1d_half(os, p, count, precision, opts, to_float);
+        }
+
+        case Dtype::Float8_E5M2: {
+            const auto* p = reinterpret_cast<const float8_e5m2_t*>(data);
+            auto to_float = [](float8_e5m2_t fp8) -> float {
+                return detail::e5m2_to_float(fp8.raw_bits);
+            };
+            return print_1d_half(os, p, count, precision, opts, to_float);
+        }
+
         case Dtype::Complex32: return print_1d_complex(os, static_cast<const complex32_t*>(data), count, precision, opts);
         case Dtype::Complex64: return print_1d_complex(os, static_cast<const complex64_t*>(data), count, precision, opts);
         case Dtype::Complex128: return print_1d_complex(os, static_cast<const complex128_t*>(data), count, precision, opts);
