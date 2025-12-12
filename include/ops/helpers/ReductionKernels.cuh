@@ -10,7 +10,7 @@
 #include <device_launch_parameters.h>
 #include <limits>
 
-// ✅ CRITICAL: Import operation templates (they work on ANY type)
+//  CRITICAL: Import operation templates (they work on ANY type)
 #include "ReductionOps.h"
 
 namespace OwnTensor {
@@ -24,15 +24,11 @@ namespace cuda {
 template<typename T> __device__ float to_float(T val) { return static_cast<float>(val); }
 template<> __device__ float to_float(__half val) { return __half2float(val); }
 template<> __device__ float to_float(__nv_bfloat16 val) { return __bfloat162float(val); }
-template<> __device__ float to_float(__nv_fp8_e4m3 val) { return static_cast<float>(val); }
-template<> __device__ float to_float(__nv_fp8_e5m2 val) { return static_cast<float>(val); }
 
 // ---- From float conversion ----
 template<typename T> __device__ T from_float(float val) { return static_cast<T>(val); }
 template<> __device__ __half from_float(float val) { return __float2half(val); }
 template<> __device__ __nv_bfloat16 from_float(float val) { return __float2bfloat16(val); }
-template<> __device__ __nv_fp8_e4m3 from_float(float val) { return __nv_fp8_e4m3(val); }
-template<> __device__ __nv_fp8_e5m2 from_float(float val) { return __nv_fp8_e5m2(val); }
 
 // // ---- NaN check (use GPU intrinsics) ----
 // template<typename T> __device__ bool is_nan(T val) { return isnan(val); }
@@ -65,65 +61,49 @@ __device__ inline T shfl_down(T val, unsigned int delta) {
     return ::__shfl_down_sync(0xffffffff, val, delta, 32);
 }
 
-// ✅ Specialization for __half (uses intrinsic shuffle)
+//  Specialization for __half (uses intrinsic shuffle)
 __device__ inline __half shfl_down(__half val, unsigned int delta) {
     return __shfl_down_sync(0xffffffff, val, delta, 32);
 }
 
-// ✅ Specialization for __nv_bfloat16 (uses intrinsic shuffle)
+//  Specialization for __nv_bfloat16 (uses intrinsic shuffle)
 __device__ inline __nv_bfloat16 shfl_down(__nv_bfloat16 val, unsigned int delta) {
     return __shfl_down_sync(0xffffffff, val, delta, 32);
 }
 
-// ✅ Specialization for __nv_fp8_e4m3 (convert to float, shuffle, convert back)
-__device__ inline __nv_fp8_e4m3 shfl_down(__nv_fp8_e4m3 val, unsigned int delta) {
-    float f_val = static_cast<float>(val);
-    float shuffled = __shfl_down_sync(0xffffffff, f_val, delta, 32);
-    return __nv_fp8_e4m3(shuffled);
-}
-
-// ✅ Specialization for __nv_fp8_e5m2 (convert to float, shuffle, convert back)
-__device__ inline __nv_fp8_e5m2 shfl_down(__nv_fp8_e5m2 val, unsigned int delta) {
-    float f_val = static_cast<float>(val);
-    float shuffled = __shfl_down_sync(0xffffffff, f_val, delta, 32);
-    return __nv_fp8_e5m2(shuffled);
-}
-
-// ✅ Specialization for float8_e4m3fn_t (CPU type - shuffle raw bits)
-__device__ inline float8_e4m3fn_t shfl_down(float8_e4m3fn_t val, unsigned int delta) {
-    uint8_t raw = __shfl_down_sync(0xffffffff, val.raw_bits, delta, 32);
-    float8_e4m3fn_t result;
-    result.raw_bits = raw;
-    return result;
-}
-
-// ✅ Specialization for float8_e5m2_t (CPU type - shuffle raw bits)
-__device__ inline float8_e5m2_t shfl_down(float8_e5m2_t val, unsigned int delta) {
-    uint8_t raw = __shfl_down_sync(0xffffffff, val.raw_bits, delta, 32);
-    float8_e5m2_t result;
-    result.raw_bits = raw;
-    return result;
-}
-
-// ✅ Specialization for complex32_t (32-bit, cast to int)
+//  Specialization for complex32_t (32-bit, cast to int)
 __device__ inline complex32_t shfl_down(complex32_t val, unsigned int delta) {
     int* ptr = reinterpret_cast<int*>(&val);
     int res = __shfl_down_sync(0xffffffff, *ptr, delta, 32);
     return *reinterpret_cast<complex32_t*>(&res);
 }
 
-// ✅ Specialization for complex64_t (64-bit, cast to unsigned long long)
+//  Specialization for complex64_t (64-bit, cast to unsigned long long)
 __device__ inline complex64_t shfl_down(complex64_t val, unsigned int delta) {
     unsigned long long* ptr = reinterpret_cast<unsigned long long*>(&val);
     unsigned long long res = __shfl_down_sync(0xffffffff, *ptr, delta, 32);
     return *reinterpret_cast<complex64_t*>(&res);
 }
 
-// ✅ Specialization for complex128_t (128-bit, shuffle components)
+//  Specialization for complex128_t (128-bit, shuffle components)
 __device__ inline complex128_t shfl_down(complex128_t val, unsigned int delta) {
     double r = __shfl_down_sync(0xffffffff, val.real_, delta, 32);
     double i = __shfl_down_sync(0xffffffff, val.imag_, delta, 32);
     return complex128_t(r, i);
+}
+
+//  Specialization for float4_e2m1_t (8-bit, cast to int)
+__device__ inline float4_e2m1_t shfl_down(float4_e2m1_t val, unsigned int delta) {
+    int val_int = static_cast<int>(val.raw_bits);
+    int res = __shfl_down_sync(0xffffffff, val_int, delta, 32);
+    return float4_e2m1_t(static_cast<uint8_t>(res));
+}
+
+//  Specialization for float4_e2m1_2x_t (8-bit, cast to int)
+__device__ inline float4_e2m1_2x_t shfl_down(float4_e2m1_2x_t val, unsigned int delta) {
+    int val_int = static_cast<int>(val.raw_bits);
+    int res = __shfl_down_sync(0xffffffff, val_int, delta, 32);
+    return float4_e2m1_2x_t(static_cast<uint8_t>(res));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -276,7 +256,7 @@ __global__ void reduce_kernel(
 
             T input_value = input_data[input_lin_idx];
 
-            // ✅ ACCUMULATE USING GPU INTRINSICS
+            //  ACCUMULATE USING GPU INTRINSICS
             if constexpr (is_half) {
                 float val_f = to_float(input_value);
                 accumulator = op.reduce(accumulator, val_f);
@@ -648,7 +628,7 @@ __global__ void reduce_mean_kernel(
                 mean_val = accumulator / static_cast<double>(reduced_count);
             }
 
-            //  ✅ CONVERT BACK USING GPU INTRINSICS
+            //   CONVERT BACK USING GPU INTRINSICS
             if constexpr (is_half) {
                 output_data[output_index] = from_float<OutputT>(static_cast<float>(mean_val));
             } else if constexpr (is_complex) {
@@ -666,6 +646,8 @@ __global__ void reduce_mean_kernel(
                         typename std::conditional<std::is_same_v<OutputT, complex64_t>, float, double>::type
                     >::type>(mean_val.imag()));
                 }
+            } else if constexpr (std::is_same_v<OutputT, float4_e2m1_2x_t> || std::is_same_v<OutputT, float4_e2m1_t>) {
+                output_data[output_index] = static_cast<OutputT>(static_cast<float>(mean_val));
             } else {
                 output_data[output_index] = static_cast<OutputT>(mean_val);
             }
@@ -677,10 +659,10 @@ __global__ void reduce_mean_kernel(
 // VARIANCE REDUCTION KERNEL (FIXED - Now accepts separate MeanT type)
 // ═══════════════════════════════════════════════════════════
 
-template<typename T, typename MeanT, typename OutputT, template<typename> class VarianceOpType>
+template<typename T, typename MeanT, typename OutputT, typename AccT, template<typename> class VarianceOpType>
 __global__ void reduce_variance_kernel(
     const T* __restrict__ input_data,
-    const MeanT* __restrict__ mean_data,  // ✅ SEPARATE TYPE for mean!
+    const MeanT* __restrict__ mean_data,  //  SEPARATE TYPE for mean!
     OutputT* __restrict__ output_data,
     const int64_t* __restrict__ input_dims,
     const int64_t* __restrict__ input_strides,
@@ -695,18 +677,11 @@ __global__ void reduce_variance_kernel(
     int num_reduced_dims,
     bool rank_preserved)
 {
-    // ✅ Determine if this is NaN-aware variance
+    //  Determine if this is NaN-aware variance
     constexpr bool is_nan_aware = std::is_same_v<VarianceOpType<T>, detail::NanVarianceOp<T>>;
     constexpr bool is_complex_out = std::is_same_v<OutputT, complex32_t> || std::is_same_v<OutputT, complex64_t> || std::is_same_v<OutputT, complex128_t>;
     
-    // ✅ Use MeanT for accumulation (matches mean tensor type)
-    using AccT = typename std::conditional<
-        std::is_same_v<T, __half> || std::is_same_v<T, __nv_bfloat16>,
-        float,
-        MeanT  // ✅ Use mean type for accumulator
-    >::type;
-    
-    // ✅ Check if AccT is complex (must come after AccT is defined)
+    //  Check if AccT is complex (must come after AccT is defined)
     constexpr bool is_complex_acc = std::is_same_v<AccT, complex32_t> || std::is_same_v<AccT, complex64_t> || std::is_same_v<AccT, complex128_t>;
     
     extern __shared__ char shared_mem[];
@@ -765,7 +740,7 @@ __global__ void reduce_variance_kernel(
             }
         }
 
-        // ✅ Compute linear index for mean tensor
+        //  Compute linear index for mean tensor
         int64_t mean_shape[10];
         for (int d = 0; d < ndim; ++d) {
             bool is_reduced = false;
@@ -786,7 +761,7 @@ __global__ void reduce_variance_kernel(
             mean_stride *= mean_shape[d];
         }
         
-        // ✅ Get mean value - now correctly typed!
+        //  Get mean value - now correctly typed!
         AccT mean_val;
         if constexpr (std::is_same_v<MeanT, __half> || std::is_same_v<MeanT, __nv_bfloat16>) {
             mean_val = to_float(mean_data[mean_index]);
@@ -839,7 +814,7 @@ __global__ void reduce_variance_kernel(
             
             T input_value = input_data[input_lin_idx];
             
-            // ✅ Convert input to AccT (which matches mean type)
+            //  Convert input to AccT (which matches mean type)
             AccT val;
             if constexpr (std::is_same_v<T, __half> || std::is_same_v<T, __nv_bfloat16>) {
                 val = to_float(input_value);

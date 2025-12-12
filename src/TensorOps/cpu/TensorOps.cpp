@@ -4,7 +4,8 @@
 #include "ops/TensorOps.h"
 #include "ops/TensorOps.cuh"
 #include "device/DeviceCore.h"
-#include "dtype/DtypeTraits.h"  // ✅ ADD THIS for promote_dtypes_bool
+#include "dtype/fp4.h"
+#include "dtype/DtypeTraits.h"  //  ADD THIS for promote_dtypes_bool
 #include <driver_types.h>
 #include <stdexcept>
 #include <functional>
@@ -28,23 +29,23 @@ static Tensor promote_if_needed(const Tensor& input, Dtype target_dtype) {
 // ============================================================================
 Tensor operator+(const Tensor& lhs, const Tensor& rhs) 
 {
-    // ✅ 1. Determine promoted dtype
+    //  1. Determine promoted dtype
     Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
     
-    // ✅ 2. Convert operands if needed
+    //  2. Convert operands if needed
     Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
     Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
     
-    // ✅ 3. Compute output shape (broadcasting)
+    //  3. Compute output shape (broadcasting)
     Shape output_shape = lhs_promoted.shape();
     if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    // ✅ 4. Create output tensor with promoted dtype
+    //  4. Create output tensor with promoted dtype
     Tensor output(output_shape, promoted_dtype, lhs.device(), lhs.requires_grad());
 
-    // ✅ 5. Perform operation
+    //  5. Perform operation
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
         #ifdef WITH_CUDA
@@ -136,7 +137,7 @@ Tensor operator*(const Tensor& lhs, const Tensor& rhs)
 // ============================================================================
 Tensor operator/(const Tensor& lhs, const Tensor& rhs) 
 {
-    // ✅ USE DIVISION-SPECIFIC PROMOTION
+    //  USE DIVISION-SPECIFIC PROMOTION
     Dtype promoted_dtype = promote_dtypes_division(lhs.dtype(), rhs.dtype());
     
     Tensor lhs_promoted = (lhs.dtype() != promoted_dtype) ? lhs.as_type(promoted_dtype) : lhs;
@@ -172,7 +173,7 @@ Tensor operator/(const Tensor& lhs, const Tensor& rhs)
 
 Tensor operator+=(Tensor& lhs, const Tensor& rhs)
 {
-    // ⚠️ In-place ops require compatible types (rhs must be promotable to lhs)
+    //  In-place ops require compatible types (rhs must be promotable to lhs)
     if (lhs.dtype() != rhs.dtype()) {
         // Check if rhs can be safely promoted to lhs type
         Dtype promoted = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
@@ -292,7 +293,7 @@ Tensor operator*=(Tensor& lhs, const Tensor& rhs)
 
 Tensor operator/=(Tensor& lhs, const Tensor& rhs)
 {
-    // ✅ Check if division would require float promotion
+    //  Check if division would require float promotion
     Dtype div_promoted = promote_dtypes_division(lhs.dtype(), rhs.dtype());
     
     if (div_promoted != lhs.dtype()) {
@@ -337,23 +338,23 @@ Tensor operator/=(Tensor& lhs, const Tensor& rhs)
 
 Tensor operator==(const Tensor& lhs, const Tensor& rhs) 
 {
-    // ✅ 1. Promote types to common dtype (use arithmetic promotion rules)
+    //  1. Promote types to common dtype (use arithmetic promotion rules)
     Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
     
-    // ✅ 2. Convert operands if needed
+    //  2. Convert operands if needed
     Tensor lhs_promoted = (lhs.dtype() != promoted_dtype) ? lhs.as_type(promoted_dtype) : lhs;
     Tensor rhs_promoted = (rhs.dtype() != promoted_dtype) ? rhs.as_type(promoted_dtype) : rhs;
     
-    // ✅ 3. Compute output shape (broadcasting)
+    //  3. Compute output shape (broadcasting)
     Shape output_shape = lhs_promoted.shape();
     if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    // ✅ 4. Create output tensor (always Bool dtype)
+    //  4. Create output tensor (always Bool dtype)
     Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
 
-    // ✅ 5. Perform comparison using promoted types
+    //  5. Perform comparison using promoted types
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
         #ifdef WITH_CUDA
@@ -432,7 +433,8 @@ Tensor operator<=(const Tensor& lhs, const Tensor& rhs)
             constexpr bool is_complex = 
                 std::is_same_v<T, complex32_t> ||
                 std::is_same_v<T, complex64_t> ||
-                std::is_same_v<T, complex128_t>;
+                std::is_same_v<T, complex128_t> ||
+                std::is_same_v<T, float4_e2m1_2x_t>;
             if constexpr (is_complex) {
                 return false; // Complex numbers are not ordered
             } else {
@@ -472,7 +474,8 @@ Tensor operator>=(const Tensor& lhs, const Tensor& rhs)
             constexpr bool is_complex = 
                 std::is_same_v<T, complex32_t> ||
                 std::is_same_v<T, complex64_t> ||
-                std::is_same_v<T, complex128_t>;
+                std::is_same_v<T, complex128_t> ||
+                std::is_same_v<T, float4_e2m1_2x_t>;
             if constexpr (is_complex) {
                 return false; // Complex numbers are not ordered
             } else {
@@ -512,7 +515,8 @@ Tensor operator>(const Tensor& lhs, const Tensor& rhs)
             constexpr bool is_complex = 
                 std::is_same_v<T, complex32_t> ||
                 std::is_same_v<T, complex64_t> ||
-                std::is_same_v<T, complex128_t>;
+                std::is_same_v<T, complex128_t> ||
+                std::is_same_v<T, float4_e2m1_2x_t>;
             if constexpr (is_complex) {
                 return false; // Complex numbers are not ordered
             } else {
@@ -552,7 +556,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
             constexpr bool is_complex = 
                 std::is_same_v<T, complex32_t> ||
                 std::is_same_v<T, complex64_t> ||
-                std::is_same_v<T, complex128_t>;
+                std::is_same_v<T, complex128_t> ||
+                std::is_same_v<T, float4_e2m1_2x_t>;
             if constexpr (is_complex) {
                 return false; // Complex numbers are not ordered
             } else {
@@ -647,7 +652,7 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
     }
     else 
     {
-        // ✅ FIXED: Convert to bool first, then XOR
+        //  FIXED: Convert to bool first, then XOR
         apply_binary_op_bool(lhs, rhs, output, [](auto a, auto b) {
             // Convert to boolean (non-zero = true), then XOR
             using T1 = decltype(a);

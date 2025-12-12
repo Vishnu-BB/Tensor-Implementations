@@ -152,7 +152,7 @@ Tensor reduce_nanmean(const Tensor& input, const std::vector<int64_t>& axes, boo
 Tensor reduce_argmin(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim, cudaStream_t stream) {
      std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     
-    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis argmin is fundamentally broken)
+    //  FIX: Restrict to single axis for partial reductions (multi-axis argmin is fundamentally broken)
     // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
     if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
         throw std::runtime_error(
@@ -173,7 +173,7 @@ Tensor reduce_argmin(const Tensor& input, const std::vector<int64_t>& axes, bool
 Tensor reduce_argmax(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim, cudaStream_t stream) {
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     
-    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis argmax is fundamentally broken)
+    //  FIX: Restrict to single axis for partial reductions (multi-axis argmax is fundamentally broken)
     // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
     if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
         throw std::runtime_error(
@@ -204,7 +204,7 @@ Tensor reduce_nanargmin(const Tensor& input, const std::vector<int64_t>& axes, b
     }
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     
-    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis nanargmin is fundamentally broken)
+    //  FIX: Restrict to single axis for partial reductions (multi-axis nanargmin is fundamentally broken)
     // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
     if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
         throw std::runtime_error(
@@ -232,7 +232,7 @@ Tensor reduce_nanargmax(const Tensor& input, const std::vector<int64_t>& axes, b
     }
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
 
-    // ✅ FIX: Restrict to single axis for partial reductions (multi-axis nanargmax is fundamentally broken)
+    //  FIX: Restrict to single axis for partial reductions (multi-axis nanargmax is fundamentally broken)
     // Full reduction (all axes) is OK, single-axis is OK, but partial multi-axis is broken
     if (normalized_axes.size() > 1 && normalized_axes.size() < input.shape().dims.size()) {
         throw std::runtime_error(
@@ -385,10 +385,10 @@ std::pair<Tensor, Tensor> reduce_var_mean(const Tensor& input,
         );
     }
     
-    // ✅ FIX: Compute mean ONCE with the correct keepdim setting
+    //  FIX: Compute mean ONCE with the correct keepdim setting
     Tensor mean = reduce_mean(input, axes, keepdim, stream);
     
-    // ✅ FIX: Compute variance using dispatch_variance_kernel which will compute its own mean internally
+    //  FIX: Compute variance using dispatch_variance_kernel which will compute its own mean internally
     std::vector<int64_t> normalized_axes = detail::normalize_axes(input.shape().dims, axes);
     Tensor var = dispatch_by_dtype(input.dtype(), [&](auto T_val) -> Tensor {
         using T = decltype(T_val);

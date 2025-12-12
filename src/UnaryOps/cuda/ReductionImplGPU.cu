@@ -4,10 +4,12 @@
 #include "core/Tensor.h"
 #include <cuda_runtime.h>
 
-// ✅ CRITICAL: Include both custom structs AND native CUDA types
+//  CRITICAL: Include both custom structs AND native CUDA types
 #include "dtype/Types.h"        // Custom structs (float16_t, bfloat16_t)
+#include "dtype/fp4.h"
 #include <cuda_fp16.h>          // Native CUDA types (__half, __nv_bfloat16)
 #include <cuda_bf16.h>
+#include "dtype/CudaTraits.h"
 
 namespace OwnTensor {
 namespace detail {
@@ -17,13 +19,7 @@ namespace detail {
 // ═══════════════════════════════════════════════════════════
 // TYPE CONVERSION TRAITS (Custom Struct → Native CUDA Type)
 // ═══════════════════════════════════════════════════════════
-
-template<typename T> struct ToCudaNative { using type = T; };
-template<> struct ToCudaNative<float16_t> { using type = __half; };
-template<> struct ToCudaNative<bfloat16_t> { using type = __nv_bfloat16; };
-
-template<typename T>
-using CudaNativeType = typename ToCudaNative<T>::type;
+// Traits are now defined in dtype/CudaTraits.h
 
 // =================================================================
 // GPU DEVICE MEMORY HELPER
@@ -62,7 +58,7 @@ Tensor dispatch_reduction_gpu(const Tensor& input,
     // Determine output dtype
     Dtype output_dtype;
     if constexpr (std::is_same_v<T, bool>) {
-        output_dtype = Dtype::Bool;  // ✅ Boolean operations return Bool
+        output_dtype = Dtype::Bool;  //  Boolean operations return Bool
     } else if constexpr (std::is_integral_v<T>) {
         output_dtype = Dtype::Int64;
     } else {
@@ -107,7 +103,7 @@ Tensor dispatch_reduction_gpu(const Tensor& input,
     int threads_per_block = 256;
     int num_blocks = num_slices;
     
-    // ✅ TYPE CONVERSION: Custom struct → Native CUDA type
+    //  TYPE CONVERSION: Custom struct → Native CUDA type
     using CudaT = CudaNativeType<T>;
     
     // Calculate shared memory for accumulator type
@@ -120,20 +116,20 @@ Tensor dispatch_reduction_gpu(const Tensor& input,
         shared_mem_size = (threads_per_block / 32) * sizeof(T);
     }
     
-    // ✅ FIXED: Proper output type selection
+    //  FIXED: Proper output type selection
     using OutputCppT = typename std::conditional<
         std::is_integral_v<T>,
         int64_t,
         T
     >::type;
     
-    // ✅ CRITICAL: Cast pointers to NATIVE CUDA types
+    //  CRITICAL: Cast pointers to NATIVE CUDA types
     const CudaT* input_data = reinterpret_cast<const CudaT*>(input.data<T>());
     
     using OutputCudaT = CudaNativeType<OutputCppT>;
     OutputCudaT* output_data = reinterpret_cast<OutputCudaT*>(output.data<OutputCppT>());
     
-    // ✅ Launch kernel with NATIVE CUDA types
+    //  Launch kernel with NATIVE CUDA types
     cuda::reduce_kernel<CudaT, OutputCudaT, OpType><<<num_blocks, threads_per_block, shared_mem_size,stream>>>(
         input_data,
         output_data,
@@ -206,11 +202,11 @@ Tensor dispatch_index_reduction_gpu(const Tensor& input,
     int threads_per_block = 256;
     int num_blocks = num_slices;
     
-    // ✅ TYPE CONVERSION
+    //  TYPE CONVERSION
     using CudaT = CudaNativeType<T>;
     size_t shared_mem_size = (threads_per_block / 32) * sizeof(detail::ValueIndex<CudaT>);
     
-    // ✅ Cast pointers to native CUDA types
+    //  Cast pointers to native CUDA types
     const CudaT* input_data = reinterpret_cast<const CudaT*>(input.data<T>());
     int64_t* output_data = output.data<int64_t>();
     
@@ -296,7 +292,7 @@ Tensor dispatch_mean_gpu(const Tensor& input,
     int num_warps = (threads_per_block + 31) / 32;
     size_t shared_mem_size = num_warps * sizeof(double) + num_warps * sizeof(int64_t);
     
-    // ✅ TYPE CONVERSION
+    //  TYPE CONVERSION
     using CudaT = CudaNativeType<T>;
     
     using OutputCppT = typename std::conditional<
@@ -307,7 +303,7 @@ Tensor dispatch_mean_gpu(const Tensor& input,
     
     using OutputCudaT = CudaNativeType<OutputCppT>;
     
-    // ✅ Cast pointers to native CUDA types
+    //  Cast pointers to native CUDA types
     const CudaT* input_data = reinterpret_cast<const CudaT*>(input.data<T>());
     OutputCudaT* output_data = reinterpret_cast<OutputCudaT*>(output.data<OutputCppT>());
     
@@ -349,12 +345,12 @@ Tensor dispatch_variance_gpu(const Tensor& input,
                              {
     constexpr bool is_nan_aware = std::is_same_v<VarianceOpType<T>, NanVarianceOp<T>>;
     
-    // ✅ STEP 1: Compute mean on GPU (always keepdim=true for variance)
+    //  STEP 1: Compute mean on GPU (always keepdim=true for variance)
     Tensor mean_tensor = is_nan_aware
         ? dispatch_mean_gpu<T, NanSumOp>(input, normalized_axes, true, stream)
         : dispatch_mean_gpu<T, SumOp>(input, normalized_axes, true, stream);
 
-    // ✅ STEP 2: Calculate output shape and metadata
+    //  STEP 2: Calculate output shape and metadata
     Shape output_shape = calculate_output_shape(input.shape().dims, normalized_axes, keepdim);
     int64_t reduced_count = calculate_reduced_count(input.shape().dims, normalized_axes);
     
@@ -388,21 +384,21 @@ Tensor dispatch_variance_gpu(const Tensor& input,
         }
     }
     
-    // ✅ STEP 3: Transfer metadata to device
+    //  STEP 3: Transfer metadata to device
     DeviceArray d_input_dims(input_dims, stream);//✨✨✨
     DeviceArray d_input_strides(input_strides, stream);//✨✨✨
     DeviceArray d_output_dims(output_shape.dims, stream);//✨✨✨
     DeviceArray d_normalized_axes(normalized_axes, stream);//✨✨✨
     DeviceArray d_reduced_dims(reduced_dims, stream);//✨✨✨
 
-    // ✅ STEP 4: Kernel configuration
+    //  STEP 4: Kernel configuration
     int threads_per_block = 256;
     int num_blocks = num_slices;
     
     // Type conversion for input
     using CudaT = CudaNativeType<T>;
     
-    // ✅ CRITICAL FIX: Determine the ACTUAL mean tensor type
+    //  CRITICAL FIX: Determine the ACTUAL mean tensor type
     // For integers: mean_tensor has dtype Float64, so mean is stored as double
     // For floats: mean_tensor has same dtype as input
     using MeanCppT = typename std::conditional<
@@ -422,26 +418,33 @@ Tensor dispatch_variance_gpu(const Tensor& input,
     
     using OutputCudaT = CudaNativeType<OutputCppT>;
     
-    // Calculate shared memory size
-    size_t shared_mem_size;
-    if constexpr (std::is_integral_v<T>) {
-        shared_mem_size = (threads_per_block / 32) * sizeof(double);
-    } else if constexpr (std::is_same_v<T, float16_t> || std::is_same_v<T, bfloat16_t>) {
-        shared_mem_size = (threads_per_block / 32) * sizeof(float);
-    } else {
-        shared_mem_size = (threads_per_block / 32) * sizeof(T);
-    }
+    //  Define Accumulator Type
+    using AccCppT = typename std::conditional<
+        std::is_integral_v<T>,
+        double,
+        typename std::conditional<
+            std::is_same_v<T, float16_t> || std::is_same_v<T, bfloat16_t> || 
+            std::is_same_v<T, float4_e2m1_t> || std::is_same_v<T, float4_e2m1_2x_t>,
+            float,
+            T
+        >::type
+    >::type;
+
+    using AccCudaT = CudaNativeType<AccCppT>;
     
-    // ✅ STEP 5: Cast pointers to CORRECT native CUDA types
+    // Calculate shared memory size based on Accumulator Type
+    size_t shared_mem_size = (threads_per_block / 32) * sizeof(AccCudaT);
+    
+    //  STEP 5: Cast pointers to CORRECT native CUDA types
     const CudaT* input_data = reinterpret_cast<const CudaT*>(input.data<T>());
     
-    // ✅ FIX: Use the ACTUAL mean tensor type (not the input type!)
+    //  FIX: Use the ACTUAL mean tensor type (not the input type!)
     const MeanCudaT* mean_data = reinterpret_cast<const MeanCudaT*>(mean_tensor.data<MeanCppT>());
     
     OutputCudaT* output_data = reinterpret_cast<OutputCudaT*>(output.data<OutputCppT>());
     
-    // ✅ STEP 6: LAUNCH THE VARIANCE KERNEL
-    cuda::reduce_variance_kernel<CudaT, MeanCudaT, OutputCudaT, VarianceOpType>
+    //  STEP 6: LAUNCH THE VARIANCE KERNEL
+    cuda::reduce_variance_kernel<CudaT, MeanCudaT, OutputCudaT, AccCudaT, VarianceOpType>
         <<<num_blocks, threads_per_block, shared_mem_size, stream>>>(//✨✨✨
         input_data,
         mean_data,           // Pre-computed mean (CORRECT TYPE!)
@@ -460,7 +463,7 @@ Tensor dispatch_variance_gpu(const Tensor& input,
         rank_preserved
     );
     
-    // ✅ STEP 7: Error checking
+    //  STEP 7: Error checking
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA variance kernel launch failed: ") + 
@@ -472,7 +475,7 @@ Tensor dispatch_variance_gpu(const Tensor& input,
 }
 
 // =================================================================
-// ✅ EXPLICIT TEMPLATE INSTANTIATIONS - Using Custom Structs
+//  EXPLICIT TEMPLATE INSTANTIATIONS - Using Custom Structs
 // =================================================================
 // ===========================================================
 // UNSIGNED INTEGER TYPES - BASIC OPERATIONS ONLY (NO NaN)
@@ -560,8 +563,10 @@ template Tensor dispatch_variance_gpu<int64_t, VarianceOp>(const Tensor& input, 
 template Tensor dispatch_variance_gpu<int64_t, NanVarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction, cudaStream_t stream); //✨✨✨
 
 // ===========================================================
-// ✅ FLOATING POINT - Using CUSTOM STRUCTS (NOT __half/__nv_bfloat16)
+//  FLOATING POINT - Using CUSTOM STRUCTS (NOT __half/__nv_bfloat16)
 // ===========================================================
+
+
 
 // float16_t (custom struct)
 template Tensor dispatch_reduction_gpu<float16_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
@@ -648,7 +653,13 @@ template Tensor dispatch_index_reduction_gpu<bool, ArgMaxOp>(const Tensor&, cons
 // Boolean-specific reductions
 template Tensor dispatch_reduction_gpu<bool, AllOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);
 template Tensor dispatch_reduction_gpu<bool, AnyOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);
+#endif // WITH_CUDA
 
+// ===========================================================
+// COMPLEX TYPES - Explicit Instantiations
+// ===========================================================
+
+#ifdef WITH_CUDA
 // complex32_t
 template Tensor dispatch_reduction_gpu<complex32_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);
 template Tensor dispatch_reduction_gpu<complex32_t, ProductOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);
@@ -702,49 +713,7 @@ template Tensor dispatch_mean_gpu<complex128_t, SumOp>(const Tensor&, const std:
 template Tensor dispatch_mean_gpu<complex128_t, NanSumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);
 template Tensor dispatch_variance_gpu<complex128_t, VarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction, cudaStream_t stream);
 template Tensor dispatch_variance_gpu<complex128_t, NanVarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction, cudaStream_t stream);
-
-//FP8 types
-
-// Float8_E4M3FN 
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, ProductOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, MinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, MaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, NanSumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, NanProductOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, NanMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e4m3fn_t, NanMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e4m3fn_t, ArgMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e4m3fn_t, ArgMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e4m3fn_t, NanArgMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e4m3fn_t, NanArgMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_mean_gpu<float8_e4m3fn_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_mean_gpu<float8_e4m3fn_t, NanSumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_variance_gpu<float8_e4m3fn_t, VarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction  , cudaStream_t stream); //✨✨✨
-template Tensor dispatch_variance_gpu<float8_e4m3fn_t, NanVarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction, cudaStream_t stream); //✨✨✨
-
-// Float8_E5M2
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, ProductOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, MinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, MaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, NanSumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, NanProductOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, NanMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_reduction_gpu<float8_e5m2_t, NanMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e5m2_t, ArgMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e5m2_t, ArgMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e5m2_t, NanArgMinOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_index_reduction_gpu<float8_e5m2_t, NanArgMaxOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_mean_gpu<float8_e5m2_t, SumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_mean_gpu<float8_e5m2_t, NanSumOp>(const Tensor&, const std::vector<int64_t>&, bool, cudaStream_t);//✨✨✨
-template Tensor dispatch_variance_gpu<float8_e5m2_t, VarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction  , cudaStream_t stream); //✨✨✨
-template Tensor dispatch_variance_gpu<float8_e5m2_t, NanVarianceOp>(const Tensor& input, const std::vector<int64_t>& axes, bool keepdim , int64_t correction, cudaStream_t stream); //✨✨✨
-
-
-
-#endif // WITH_CUDA
-
+#endif
 
 } // namespace detail
 } // namespace OwnTensor

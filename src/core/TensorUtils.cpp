@@ -166,6 +166,13 @@ void print_1d_half(std::ostream& os, const HalfT* ptr, size_t count, int precisi
     }
 }
 
+// Helper for float4 packed
+// template <typename Fp4_2x>
+// void print_1d_packed(std::ostream& os, const Fp4_2x* ptr, size_t count, int precision, const PrintOptions& opts)
+// {
+//     const bool summar
+// }
+
 // Helper for complex types
 template <typename ComplexT>
 void print_1d_complex(std::ostream& os, const ComplexT* ptr, size_t count, int precision,
@@ -255,20 +262,25 @@ void dispatch_print_1d(std::ostream& os, Dtype dt, const void* data, size_t coun
             return print_1d_half(os, p, count, precision, opts, to_float);
         }
 
-        case Dtype::Float8_E4M3FN: {
-            const auto* p = reinterpret_cast<const float8_e4m3fn_t*>(data);
-            auto to_float = [](float8_e4m3fn_t fp8) -> float {
-                return detail::e4m3fn_to_float(fp8.raw_bits);
+        case Dtype::Float4_e2m1: {
+            const auto* p = reinterpret_cast<const float4_e2m1_t*>(data);
+            auto to_float = [](float4_e2m1_t f4) -> float {
+                return static_cast<float>(f4);
             };
             return print_1d_half(os, p, count, precision, opts, to_float);
         }
-
-        case Dtype::Float8_E5M2: {
-            const auto* p = reinterpret_cast<const float8_e5m2_t*>(data);
-            auto to_float = [](float8_e5m2_t fp8) -> float {
-                return detail::e5m2_to_float(fp8.raw_bits);
+        case Dtype::Float4_e2m1_2x: {
+            const auto* p = reinterpret_cast<const float4_e2m1_2x_t*>(data);
+            auto to_float_high = [](float4_e2m1_2x_t v) -> float {
+                return static_cast<float>(v.get_high());
             };
-            return print_1d_half(os, p, count, precision, opts, to_float);
+            return print_1d_half(os, p, count, precision, opts, to_float_high);
+
+            auto to_float_low = [](float4_e2m1_2x_t v) -> float {
+                return static_cast<float>(v.get_low());
+            };
+            return print_1d_half(os, p, count, precision, opts, to_float_low);
+
         }
 
         case Dtype::Complex32: return print_1d_complex(os, static_cast<const complex32_t*>(data), count, precision, opts);
@@ -341,7 +353,7 @@ void print_recursive_from_base(std::ostream& os,
     os << "]";
 }
 
-// Convenience: data-path recursive printer (uses tensor's own data())
+
 void print_recursive_data(std::ostream& os,
                           const Tensor& t,
                           std::vector<int64_t>& indices,
@@ -351,7 +363,7 @@ void print_recursive_data(std::ostream& os,
     print_recursive_from_base(os, t, t.data(), indices, depth, opts);
 }
 
-} // namespace (anon)
+} 
 
 
 // ========== public: Tensor::display (data + gradient) ==========
@@ -385,8 +397,7 @@ void Tensor::display(std::ostream& os, int precision) const {
         os << "\n";
     }
 
-    // ---- Gradient (NEW) ----
-    // Print only if a grad buffer was allocated (requires_grad_ && grad_ptr_ != nullptr)
+
     if (requires_grad_ && grad_ptr_) {
         os << "\nGrad(shape=(";
         for (size_t i = 0; i < shape_.dims.size(); ++i) {
@@ -403,7 +414,6 @@ void Tensor::display(std::ostream& os, int precision) const {
             return;
         }
 
-        // CPU path (direct); if you enable CUDA-copy in future, handle it above.
         {
             std::vector<int64_t> idx;
             idx.reserve(shape_.dims.size());

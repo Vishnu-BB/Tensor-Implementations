@@ -57,7 +57,7 @@ namespace detail {
 // ═══════════════════════════════════════════════════════════
 
 #ifdef __CUDA_ARCH__
-// ✅ GPU device code - use intrinsics
+//  GPU device code - use intrinsics
 template<typename T> __device__ inline T gpu_add(T a, T b) { return a + b; }
 template<> __device__ inline __half gpu_add(__half a, __half b) { return __hadd(a, b); }
 template<> __device__ inline __nv_bfloat16 gpu_add(__nv_bfloat16 a, __nv_bfloat16 b) { return __hadd(a, b); }
@@ -85,7 +85,7 @@ template<> __device__ inline bool gpu_isnan(__half val) { return __hisnan(val); 
 template<> __device__ inline bool gpu_isnan(__nv_bfloat16 val) { return __hisnan(val); }
 
 // #else
-// // ✅ CPU host code - use regular operations
+// //  CPU host code - use regular operations
 // template<typename T> inline T gpu_add(T a, T b) { return a + b; }
 // template<typename T> inline T gpu_mul(T a, T b) { return a * b; }
 // template<typename T> inline bool gpu_lt(T a, T b) { return a < b; }
@@ -191,6 +191,10 @@ DEVICE_HOST constexpr T get_lowest_value() {
         return -2147483648;
     } else if constexpr (std::is_same_v<T, int64_t>) {
         return -9223372036854775807LL - 1LL;
+    } else if constexpr (std::is_same_v<T, float4_e2m1_t>) {
+        return T(-3.0f); // Min representable value
+    } else if constexpr (std::is_same_v<T, float4_e2m1_2x_t>) {
+        return T(-3.0f); // Min representable value
     }
     return T{};
 }
@@ -219,6 +223,15 @@ DEVICE_HOST constexpr T get_max_value() {
         return 2147483647;
     } else if constexpr (std::is_same_v<T, int64_t>) {
         return 9223372036854775807LL;
+    } else if constexpr (std::is_same_v<T, float4_e2m1_t>) {
+        return T(3.0f); // Max representable value
+    } else if constexpr (std::is_same_v<T, float4_e2m1_2x_t>) {
+        return T(3.0f); // Max representable value (sets both to max?)
+        // Actually, for packed type, identity should probably be max in both slots?
+        // But get_max_value returns a scalar T. 
+        // If T is float4_e2m1_2x_t, it constructs from float.
+        // The constructor float4_e2m1_2x_t(float) sets both low and high to that value.
+        // So T(3.0f) sets both to 3.0f. Correct.
     }
     return T{};
 }
@@ -233,10 +246,19 @@ DEVICE_HOST inline bool is_nan_check(T val) {
     } else if constexpr (is_half_float_v<T>) {
         float f_val = static_cast<float>(val);
         return std::isnan(f_val);
+    } else if constexpr (std::is_same_v<T, float4_e2m1_t> || std::is_same_v<T, float4_e2m1_2x_t>) {
+        float f_val = static_cast<float>(val);
+        return std::isnan(f_val);
     }
     return false;
     #endif
 }
+
+// Specializations for gpu_isnan
+#ifdef __CUDA_ARCH__
+template<> __device__ inline bool gpu_isnan(float4_e2m1_t val) { return std::isnan(static_cast<float>(val)); }
+template<> __device__ inline bool gpu_isnan(float4_e2m1_2x_t val) { return std::isnan(static_cast<float>(val)); }
+#endif
 
 // ═══════════════════════════════════════════════════════════
 // ACCUMULATOR TYPE SELECTOR
@@ -257,8 +279,12 @@ template<> struct AccumulatorTypeSelector<uint64_t> { using type = int64_t; };
 // Half precision floats use float for better precision
 template<> struct AccumulatorTypeSelector<float16_t> { using type = float; };
 template<> struct AccumulatorTypeSelector<bfloat16_t> { using type = float; };
-// ✅ FIX: Bool should accumulate as int64_t (like PyTorch/NumPy)
+//  FIX: Bool should accumulate as int64_t (like PyTorch/NumPy)
 template<> struct AccumulatorTypeSelector<bool> { using type = int64_t; };
+
+// FP4 types should accumulate as float to avoid needing math operators on the types themselves
+template<> struct AccumulatorTypeSelector<float4_e2m1_t> { using type = float; };
+template<> struct AccumulatorTypeSelector<float4_e2m1_2x_t> { using type = float; };
 
 
 #ifdef __CUDACC__
@@ -270,7 +296,7 @@ template<typename T>
 using AccumulatorType = typename AccumulatorTypeSelector<T>::type;
 
 // ═══════════════════════════════════════════════════════════
-// ✅ CORE REDUCTION OPERATIONS (NOW USES GPU INTRINSICS!)
+//  CORE REDUCTION OPERATIONS (NOW USES GPU INTRINSICS!)
 // ═══════════════════════════════════════════════════════════
 
 template <typename T>
@@ -284,7 +310,7 @@ struct SumOp {
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const { 
         
         #ifdef __CUDA_ARCH__
-        // ✅ GPU: Use intrinsics for half types
+        //  GPU: Use intrinsics for half types
         // constexpr bool is_bool = std::is_same_v<AccT, bool>;
         // if constexpr (is_bool) {
         //     throw std::runtime_error(
@@ -317,7 +343,7 @@ struct ProductOp {
     
     DEVICE_HOST AccT reduce(const AccT& a, const AccT& b) const { 
         #ifdef __CUDA_ARCH__
-        // ✅ GPU path
+        //  GPU path
         if constexpr (is_any_float_v<AccT>) {
             if (gpu_isnan(a)) return a;
             if (gpu_isnan(b)) return b;
@@ -362,7 +388,7 @@ struct MinOp {
             return a;  // Placeholder - should never be called
         } else {
             #ifdef __CUDA_ARCH__
-            // ✅ GPU: Use intrinsics
+            //  GPU: Use intrinsics
             if constexpr (is_any_float_v<T>) {
                 if (gpu_isnan(a)) return a;
                 if (gpu_isnan(b)) return b;
@@ -408,7 +434,7 @@ struct MaxOp {
             return a;  // Placeholder - should never be called
         } else {
             #ifdef __CUDA_ARCH__
-            // ✅ GPU: Use intrinsics
+            //  GPU: Use intrinsics
             if constexpr (is_any_float_v<T>) {
                 if (gpu_isnan(a)) return a;
                 if (gpu_isnan(b)) return b;
@@ -442,7 +468,7 @@ struct VarianceOp {
     
     DEVICE_HOST AccT reduce(const AccT& acc, const AccT& val) const {
         #ifdef __CUDA_ARCH__
-        // ✅ GPU: Propagate NaN immediately
+        //  GPU: Propagate NaN immediately
         if constexpr (is_any_float_v<AccT>) {
             if (gpu_isnan(acc)) return acc;  // Already NaN, propagate it
             if (gpu_isnan(val)) return val;  // New NaN, propagate it
@@ -450,7 +476,7 @@ struct VarianceOp {
         AccT diff = val - mean_value;
         return gpu_add(acc, gpu_mul(diff, diff));
         #else
-        // ✅ CPU: Propagate NaN immediately
+        //  CPU: Propagate NaN immediately
         if constexpr (is_any_float_v<AccT>) {
             if (is_nan_check(acc)) return acc;  // Already NaN, propagate it
             if (is_nan_check(val)) return val;  // New NaN, propagate it
@@ -614,12 +640,12 @@ struct NanVarianceOp {
     
     DEVICE_HOST AccT reduce(const AccT& acc, const AccT& val) const {
         #ifdef __CUDA_ARCH__
-        // ✅ GPU: Skip NaN values (don't propagate them)
+        //  GPU: Skip NaN values (don't propagate them)
         if (gpu_isnan(val)) return acc;  // Ignore NaN, return accumulator unchanged
         AccT diff = val - mean_value;
         return gpu_add(acc, gpu_mul(diff, diff));
         #else
-        // ✅ CPU: Skip NaN values (don't propagate them)
+        //  CPU: Skip NaN values (don't propagate them)
         if (is_nan_check(val)) return acc;  // Ignore NaN, return accumulator unchanged
         AccT diff = val - mean_value;
         return acc + diff * diff;

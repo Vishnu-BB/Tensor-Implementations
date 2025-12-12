@@ -155,7 +155,7 @@ void generic_trigonometric_in_cpu(Tensor& input_tensor) {
             DataType* data_ptr = input_tensor.data<DataType>();
             #pragma omp parallel for
             for (size_t i = 0; i < input_tensor.numel(); ++i) {
-                data_ptr[i] = FloatFunc(data_ptr[i]); // FloatFunc works for both float and double via overload
+                data_ptr[i] = FloatFunc(static_cast<float>(data_ptr[i])); // FloatFunc works for both float and double via overload
             }
         }
     });

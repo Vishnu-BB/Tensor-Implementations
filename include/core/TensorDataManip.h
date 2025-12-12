@@ -4,18 +4,15 @@
 #define TENSOR_DATAMANIP_H
 
 #include "core/Tensor.h"
-//#include "dtype/Types.h"
 #include "device/DeviceTransfer.h" 
-//#include "core/TensorDispatch.h"  // For dispatch_by_dtype
 #include <iostream>
 #include <cstring>
-#include <vector> // Required for temporary vector in specialization
-//#include "dtype/DtypeTraits.h" // For is_same_type
+#include <vector> 
 
 namespace OwnTensor {
 // Forward declaration for is_same_type
-    template<typename T>
-    bool is_same_type(Dtype dtype);
+    // template<typename T>
+    // bool is_same_type(Dtype dtype);
     
     // =========================================================================
     // GENERIC IMPLEMENTATIONS (Used for standard types: float, double, int32, etc.)
@@ -49,7 +46,7 @@ namespace OwnTensor {
     template <typename T>
     inline void Tensor::fill(T value)
     {
-        // ✅ STRICT TYPE CHECKING: Match behavior of set_data()
+        //  STRICT TYPE CHECKING: Match behavior of set_data()
         // Throw error if input type doesn't match tensor's dtype
         if (!is_same_type<T>(dtype_)) {
             throw std::runtime_error("Fill: Datatype mismatch - input type must match tensor dtype");
@@ -140,65 +137,7 @@ namespace OwnTensor {
         set_data(source_data.data(), source_data.size());
     }
     
-    // --- Specialization for float8_e4m3fn_t ---
-    template <>
-    inline void Tensor::set_data<float8_e4m3fn_t>(const float8_e4m3fn_t* source_data, size_t count)
-    {
-        if (count != numel()) {
-            throw std::runtime_error("Data size does not match tensor size");
-        }
-        if (!is_same_type<float8_e4m3fn_t>(dtype_)) {
-            throw std::runtime_error("Datatype mismatch");
-        }
-
-        // Extract the raw 8-bit data into a contiguous array
-        std::vector<uint8_t> raw_data(count);
-        for (size_t i = 0; i < count; ++i) {
-            raw_data[i] = source_data[i].raw_bits;
-        }
-
-        // Copy the raw 8-bit integers to the tensor's memory
-        device::copy_memory(data_ptr_.get(), device_.device,
-                           raw_data.data(), Device::CPU,
-                           count * sizeof(uint8_t));
-    }
-    
-    // Specialization for vector<float8_e4m3fn_t>
-    template <>
-    inline void Tensor::set_data<float8_e4m3fn_t>(const std::vector<float8_e4m3fn_t>& source_data)
-    {
-        set_data(source_data.data(), source_data.size());
-    }
-    
-    // --- Specialization for float8_e5m2_t ---
-    template <>
-    inline void Tensor::set_data<float8_e5m2_t>(const float8_e5m2_t* source_data, size_t count)
-    {
-        if (count != numel()) {
-            throw std::runtime_error("Data size does not match tensor size");
-        }
-        if (!is_same_type<float8_e5m2_t>(dtype_)) {
-            throw std::runtime_error("Datatype mismatch");
-        }
-
-        // Extract the raw 8-bit data into a contiguous array
-        std::vector<uint8_t> raw_data(count);
-        for (size_t i = 0; i < count; ++i) {
-            raw_data[i] = source_data[i].raw_bits;
-        }
-
-        // Copy the raw 8-bit integers to the tensor's memory
-        device::copy_memory(data_ptr_.get(), device_.device,
-                           raw_data.data(), Device::CPU,
-                           count * sizeof(uint8_t));
-    }
-    
-    // Specialization for vector<float8_e5m2_t>
-    template <>
-    inline void Tensor::set_data<float8_e5m2_t>(const std::vector<float8_e5m2_t>& source_data)
-    {
-        set_data(source_data.data(), source_data.size());
-    }
+    // Functions for Boolean
     
     template<>
     inline void Tensor::set_data<bool>(const bool* source_data, size_t count) {
@@ -225,11 +164,11 @@ namespace OwnTensor {
                 temp_data[i] = source_data[i] ? 1 : 0;
             }
             device::copy_memory(data_ptr_.get(), device_.device,
-                            temp_data.data(), Device::CPU,
-                            count * sizeof(uint8_t));
+            temp_data.data(), Device::CPU,
+            count * sizeof(uint8_t));
         }
     }
-
+    
     template<>
     inline void Tensor::set_data<bool>(const std::vector<bool>& source_data) {
         if (source_data.size() != numel()) {
@@ -252,11 +191,11 @@ namespace OwnTensor {
             std::memcpy(dest, temp_buffer.data(), temp_buffer.size());
         } else {
             device::copy_memory(data_ptr_.get(), device_.device,
-                            temp_buffer.data(), Device::CPU,
-                            temp_buffer.size() * sizeof(uint8_t));
+            temp_buffer.data(), Device::CPU,
+            temp_buffer.size() * sizeof(uint8_t));
         }
     }
-
+    
     
     // Specialization for fill with bool
     template<>
@@ -278,6 +217,61 @@ namespace OwnTensor {
                             numel() * sizeof(uint8_t));
         }
     }
+    
+    template<>
+    inline void Tensor::set_data<float4_e2m1_t>(const float4_e2m1_t* source_data, size_t count)
+    {
+        if (count != numel())
+        {
+            throw std::runtime_error("Data size mismatch");
+        }
+        
+        if (!is_same_type<float4_e2m1_t>(dtype_))
+        {
+            throw std::runtime_error("Data type mismatch");
+        }
 
+        std::vector<uint8_t> raw_data(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            raw_data[i] = source_data[i].raw_bits;
+        }
+
+        device::copy_memory(data_ptr_.get(), device_.device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
+    }
+
+    template <>
+    inline void Tensor::set_data<float4_e2m1_t>(const std::vector<float4_e2m1_t>& source_data)
+    {
+        set_data(source_data.data(), source_data.size());
+    }
+    
+    template<>
+    inline void Tensor::set_data<float4_e2m1_2x_t>(const float4_e2m1_2x_t* source_data, size_t count)
+    {
+        if (count != numel())
+        {
+            throw std::runtime_error("Data size mismatch");
+        }
+        
+        if (!is_same_type<float4_e2m1_2x_t>(dtype_))
+        {
+            throw std::runtime_error("Data type mismatch");
+        }
+
+        std::vector<uint8_t> raw_data(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            raw_data[i] = source_data[i].raw_bits;
+        }
+
+        device::copy_memory(data_ptr_.get(), device_.device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
+    }
+
+    template <>
+    inline void Tensor::set_data<float4_e2m1_2x_t>(const std::vector<float4_e2m1_2x_t>& source_data)
+    {
+        set_data(source_data.data(), source_data.size());
+    }
 }
 #endif // TENSOR_UTILS_H

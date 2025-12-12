@@ -11,7 +11,7 @@ namespace OwnTensor
             return this->clone();
         }
 
-        // ✅ Validation: Prevent invalid complex/scalar conversions
+        //  Validation: Prevent invalid complex/scalar conversions
         bool src_is_complex = is_complex(this->dtype_);
         bool dst_is_complex = is_complex(new_dtype);
         if (src_is_complex != dst_is_complex) {
@@ -27,7 +27,7 @@ namespace OwnTensor
         // 2. Get element count
         const size_t n = this->numel();
 
-        // ✅ 3. Handle CUDA tensors differently
+        //  3. Handle CUDA tensors differently
         if (this->is_cuda()) {
             #ifdef WITH_CUDA
                 // Strategy: Copy to CPU, convert, copy back to GPU
@@ -60,7 +60,17 @@ namespace OwnTensor
                             std::is_same_v<DstType, complex64_t> ||
                             std::is_same_v<DstType, complex128_t>;
 
-                        if constexpr (src_is_complex == dst_is_complex) {
+                        constexpr bool src_is_packed = std::is_same_v<SrcType, float4_e2m1_2x_t>;
+                        constexpr bool dst_is_packed = std::is_same_v<DstType, float4_e2m1_2x_t>;
+
+                        if constexpr (src_is_packed || dst_is_packed) {
+                            if constexpr (std::is_same_v<SrcType, DstType>) {
+                                 for (size_t i = 0; i < n; ++i) dst_data[i] = src_data[i];
+                            } else {
+                                 throw std::runtime_error("Conversion to/from packed FP4 type is not supported via as_type");
+                            }
+                        }
+                        else if constexpr (src_is_complex == dst_is_complex) {
                             // Valid conversion: both complex or both non-complex
                             for (size_t i = 0; i < n; ++i) {
                                 if constexpr (src_is_complex) {
@@ -89,7 +99,7 @@ namespace OwnTensor
                 throw std::runtime_error("CUDA support not compiled");
             #endif
         } else {
-            // ✅ 4. Handle CPU tensors (original logic)
+            //  4. Handle CPU tensors (original logic)
             const auto* src_untyped_ptr = this->data_ptr_.get();
             auto* dst_untyped_ptr = new_tensor.data_ptr_.get();
 
@@ -113,7 +123,24 @@ namespace OwnTensor
                         std::is_same_v<DstType, complex64_t> ||
                         std::is_same_v<DstType, complex128_t>;
 
-                    if constexpr (src_is_complex == dst_is_complex) {
+                    constexpr bool src_is_packed = std::is_same_v<SrcType, float4_e2m1_2x_t>;
+                    constexpr bool dst_is_packed = std::is_same_v<DstType, float4_e2m1_2x_t>;
+
+                    if constexpr (src_is_packed || dst_is_packed) {
+                        if constexpr (std::is_same_v<SrcType, DstType>) {
+                             for (size_t i = 0; i < n; ++i) dst_data[i] = src_data[i];
+                        } else {
+                             // Not supported
+                             // We can't throw here at compile time, but we can at runtime.
+                             // However, we must ensure this branch compiles.
+                             // Since this lambda is instantiated for ALL types, we can't use static_cast here.
+                             // We just throw exception at runtime if this path is taken.
+                             // But we need to make sure the code is valid C++.
+                             // throw is valid.
+                             throw std::runtime_error("Conversion to/from packed FP4 type is not supported via as_type");
+                        }
+                    }
+                    else if constexpr (src_is_complex == dst_is_complex) {
                         // Valid conversion: both complex or both non-complex
                         for (size_t i = 0; i < n; ++i) {
                             if constexpr (src_is_complex) {

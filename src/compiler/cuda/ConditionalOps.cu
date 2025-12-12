@@ -17,14 +17,8 @@ __global__ void k_where(const CondT* condition, const DataT* input,
                         const DataT* other, DataT* out, size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; 
          i < n; 
-         i += gridDim.x * blockDim.x) {
-        // Handle FP8 types that don't have operator!= by converting to float
-        bool cond;
-        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
-            cond = (static_cast<float>(condition[i]) != 0.0f);
-        } else {
-            cond = (condition[i] != static_cast<CondT>(0.0f));
-        }
+         i += blockDim.x * gridDim.x) {
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i];
     }
 }
@@ -36,13 +30,8 @@ __global__ void k_where_fp16(const CondT* condition, const __half* input,
                              size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
-         i += gridDim.x * blockDim.x) {
-        bool cond;
-        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
-            cond = (static_cast<float>(condition[i]) != 0.0f);
-        } else {
-            cond = (condition[i] != static_cast<CondT>(0.0f));
-        }
+         i += blockDim.x * gridDim.x) {
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i]; 
     }
 }
@@ -53,13 +42,8 @@ __global__ void k_where_bf16(const CondT* condition, const __nv_bfloat16* input,
                              size_t n) {
     for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
          i < n;
-         i += gridDim.x * blockDim.x) {
-        bool cond;
-        if constexpr (std::is_same_v<CondT, __nv_fp8_e4m3> || std::is_same_v<CondT, __nv_fp8_e5m2>) {
-            cond = (static_cast<float>(condition[i]) != 0.0f);
-        } else {
-            cond = (condition[i] != static_cast<CondT>(0.0f));
-        }
+         i += blockDim.x * gridDim.x) {
+        bool cond = (condition[i] != static_cast<CondT>(0.0f));
         out[i] = cond ? input[i] : other[i]; 
     }
 }
@@ -182,6 +166,8 @@ void cuda_where_scalar_tensor(const Tensor& condition, T input_scalar,
             input_val = scalar_t(static_cast<float>(input_scalar), 0.0f);
         } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
             input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
+        } else if constexpr (std::is_same_v<scalar_t, float4_e2m1_2x_t> || std::is_same_v<scalar_t, float4_e2m1_t>) {
+            input_val = static_cast<scalar_t>(static_cast<float>(input_scalar));
         } else {
             input_val = static_cast<scalar_t>(input_scalar);
         }
@@ -213,6 +199,8 @@ void cuda_where_tensor_scalar(const Tensor& condition, const Tensor& input,
             other_val = scalar_t(static_cast<float>(other_scalar), 0.0f);
         } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
             other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else if constexpr (std::is_same_v<scalar_t, float4_e2m1_2x_t> || std::is_same_v<scalar_t, float4_e2m1_t>) {
+            other_val = static_cast<scalar_t>(static_cast<float>(other_scalar));
         } else {
             other_val = static_cast<scalar_t>(other_scalar);
         }
@@ -245,6 +233,9 @@ void cuda_where_scalar_scalar(const Tensor& condition, T input_scalar,
         } else if constexpr (std::is_same_v<scalar_t, complex128_t>) {
             input_val = scalar_t(static_cast<double>(input_scalar), 0.0);
             other_val = scalar_t(static_cast<double>(other_scalar), 0.0);
+        } else if constexpr (std::is_same_v<scalar_t, float4_e2m1_2x_t> || std::is_same_v<scalar_t, float4_e2m1_t>) {
+            input_val = static_cast<scalar_t>(static_cast<float>(input_scalar));
+            other_val = static_cast<scalar_t>(static_cast<float>(other_scalar));
         } else {
             input_val = static_cast<scalar_t>(input_scalar);
             other_val = static_cast<scalar_t>(other_scalar);

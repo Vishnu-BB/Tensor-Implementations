@@ -231,22 +231,22 @@ inline void cpu_where_scalar_scalar(const Tensor& condition, T input_scalar,
 // Scalar input, Tensor other
 template <typename T>
 inline Tensor where(const Tensor& condition, T input_scalar, const Tensor& other) {
-    // ✅ 1. Check if other tensor can be broadcasted to condition shape
+    //  1. Check if other tensor can be broadcasted to condition shape
     Shape output_shape = Shape{broadcast_rhs_to_lhs(condition.shape().dims, other.shape().dims)};
     
-    // ✅ 2. Get dtype from scalar type T
+    //  2. Get dtype from scalar type T
     Dtype scalar_dtype = type_to_dtype<T>();
     
-    // ✅ 3. Promote scalar dtype with tensor dtype
+    //  3. Promote scalar dtype with tensor dtype
     Dtype promoted_dtype = promote_dtypes_bool(scalar_dtype, other.dtype());
     
-    // ✅ 4. Promote other tensor if needed (no copy, just type conversion)
+    //  4. Promote other tensor if needed (no copy, just type conversion)
     Tensor other_promoted = (other.dtype() != promoted_dtype) ? other.as_type(promoted_dtype) : other;
     
-    // ✅ 5. Create output tensor
+    //  5. Create output tensor
     Tensor out(output_shape, promoted_dtype, condition.device(), false);
     
-    // ✅ 6. Call scalar backend directly - NO tensor creation for scalar!
+    //  6. Call scalar backend directly - NO tensor creation for scalar!
     if (condition.device().is_cuda()) {
         cuda_where_scalar_tensor(condition, input_scalar, other_promoted, out);
     } else {
@@ -259,22 +259,22 @@ inline Tensor where(const Tensor& condition, T input_scalar, const Tensor& other
 // Tensor input, Scalar other
 template <typename T>
 inline Tensor where(const Tensor& condition, const Tensor& input, T other_scalar) {
-    // ✅ 1. Check if input tensor can be broadcasted to condition shape
+    //  1. Check if input tensor can be broadcasted to condition shape
     Shape output_shape = Shape{broadcast_rhs_to_lhs(condition.shape().dims, input.shape().dims)};
     
-    // ✅ 2. Get dtype from scalar type T
+    //  2. Get dtype from scalar type T
     Dtype scalar_dtype = type_to_dtype<T>();
     
-    // ✅ 3. Promote scalar dtype with tensor dtype
+    //  3. Promote scalar dtype with tensor dtype
     Dtype promoted_dtype = promote_dtypes_bool(scalar_dtype, input.dtype());
     
-    // ✅ 4. Promote input tensor if needed (no copy, just type conversion)  
+    //  4. Promote input tensor if needed (no copy, just type conversion)  
     Tensor input_promoted = (input.dtype() != promoted_dtype) ? input.as_type(promoted_dtype) : input;
     
-    // ✅ 5. Create output tensor
+    //  5. Create output tensor
     Tensor out(output_shape, promoted_dtype, condition.device(), false);
     
-    // ✅ 6. Call scalar backend directly - NO tensor creation for scalar!
+    //  6. Call scalar backend directly - NO tensor creation for scalar!
     if (condition.device().is_cuda()) {
         cuda_where_tensor_scalar(condition, input_promoted, other_scalar, out);
     } else {
@@ -287,17 +287,17 @@ inline Tensor where(const Tensor& condition, const Tensor& input, T other_scalar
 // Both scalars (handles same-type and mixed-type)
 template <typename T, typename U>
 inline Tensor where(const Tensor& condition, T input_scalar, U other_scalar) {
-    // ✅ 1. Get dtypes from both scalar types
+    //  1. Get dtypes from both scalar types
     Dtype scalar_dtype1 = type_to_dtype<T>();
     Dtype scalar_dtype2 = type_to_dtype<U>();
     
-    // ✅ 2. Promote the two scalar types (handles same-type correctly)
+    //  2. Promote the two scalar types (handles same-type correctly)
     Dtype output_dtype = promote_dtypes_bool(scalar_dtype1, scalar_dtype2);
     
-    // ✅ 3. Create output tensor
+    //  3. Create output tensor
     Tensor out(condition.shape(), output_dtype, condition.device(), false);
     
-    // ✅ 4. Call scalar backend directly - NO tensor creation for scalars!
+    //  4. Call scalar backend directly - NO tensor creation for scalars!
     if (condition.device().is_cuda()) {
         cuda_where_scalar_scalar(condition, input_scalar, other_scalar, out);
     } else {

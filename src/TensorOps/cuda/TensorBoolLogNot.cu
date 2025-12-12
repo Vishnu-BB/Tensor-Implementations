@@ -10,21 +10,21 @@
 
 namespace OwnTensor
 {   
-// ✅ FIXED: Convert to bool inline, then apply logical AND
+//  FIXED: Convert to bool inline, then apply logical AND
 template<typename T>
 __global__ void bool_not_kernel(const T* a,  bool* output, size_t n)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n)
     {
-        // ✅ Convert to bool: 0 → false, non-zero → true
+        //  Convert to bool: 0 → false, non-zero → true
         bool a_bool = (a[idx] != T(0.0f));
         //bool b_bool = (b[idx] != T(0));
         output[idx] = !a_bool;
     }
 }
 
-// ✅ Specialization for __half (needs special comparison)
+//  Specialization for __half (needs special comparison)
 template<>
 __global__ void bool_not_kernel<__half>(const __half* a, bool* output, size_t n)
 {
@@ -38,7 +38,7 @@ __global__ void bool_not_kernel<__half>(const __half* a, bool* output, size_t n)
     }
 }
 
-// ✅ Specialization for __nv_bfloat16
+//  Specialization for __nv_bfloat16
 template<>
 __global__ void bool_not_kernel<__nv_bfloat16>(const __nv_bfloat16* a,  bool* output, size_t n)
 {
@@ -91,13 +91,13 @@ __global__ void bool_not_kernel<__nv_bfloat16>(const __nv_bfloat16* a,  bool* ou
 //         b_idx += coords[dim] * b_bcast_strides[dim];
 //     }
     
-//     // ✅ Convert to bool then apply logical AND
+//     //  Convert to bool then apply logical AND
 //     bool a_bool = (a[a_idx] != T(0));
 //     bool b_bool = (b[b_idx] != T(0));
 //     output[linear_idx] = a_bool && b_bool;
 // }
 
-// // ✅ Specializations for broadcast kernels
+// //  Specializations for broadcast kernels
 // template<>
 // __global__ void bool_and_kernel_broadcast<__half>(const __half* a, const __half* b, bool* output,
 //                                       const size_t* a_shape, const size_t* b_shape, const size_t* out_shape,

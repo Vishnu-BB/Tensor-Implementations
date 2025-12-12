@@ -3,7 +3,7 @@
 #ifndef TENSOR_DISPATCH_H
 #define TENSOR_DISPATCH_H
 
-// ✅ CRITICAL: Include Dtype.h first for enum definition
+//  CRITICAL: Include Dtype.h first for enum definition
 #include "dtype/Dtype.h"
 #include <stdexcept>
 #include <cstdint>
@@ -11,20 +11,20 @@
 #ifdef __CUDACC__
     #include <cuda_fp16.h>
     #include <cuda_bf16.h>
-    #include <cuda_fp8.h>  // FP8 native types (CUDA 11.8+)
 #endif
 #include "dtype/Types.h"
+#include "dtype/fp4.h"
 
-// ✅ Forward declare the Tensor class (avoid circular dependency)
+//  Forward declare the Tensor class (avoid circular dependency)
 namespace OwnTensor {
     class Tensor;
 }
 
-// ✅ CRITICAL FIX: Manually specify the type mapping WITHOUT dtype_traits
+//  CRITICAL FIX: Manually specify the type mapping WITHOUT dtype_traits
 // This avoids the circular dependency and NVCC template resolution issues
 namespace OwnTensor {
 
-// ✅ Simple type resolver that works in both CPU and CUDA contexts
+//  Simple type resolver that works in both CPU and CUDA contexts
 template<Dtype dt> struct DtypeToType;
 
 // Integer types
@@ -44,28 +44,27 @@ template<> struct DtypeToType<Dtype::Float64> { using type = double; };
 //Boolean type
 template<> struct DtypeToType<Dtype::Bool> { using type = bool;};
 
-// ✅ Half precision types - resolve based on compilation context
+// Half precision types - resolve based on compilation context
 #ifdef __CUDACC__
-    // CUDA compilation - use native CUDA types
     template<> struct DtypeToType<Dtype::Float16>  { using type = __half; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = __nv_bfloat16; };
-    template<> struct DtypeToType<Dtype::Float8_E4M3FN> { using type = __nv_fp8_e4m3; };
-    template<> struct DtypeToType<Dtype::Float8_E5M2> { using type = __nv_fp8_e5m2; };
     template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
     template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
     template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
+    template<> struct DtypeToType<Dtype::Float4_e2m1> { using type = float4_e2m1_t; };
+    template<> struct DtypeToType<Dtype::Float4_e2m1_2x> { using type = float4_e2m1_2x_t; };
 #else
     // CPU compilation - use custom types
     template<> struct DtypeToType<Dtype::Float16>  { using type = float16_t; };
     template<> struct DtypeToType<Dtype::Bfloat16> { using type = bfloat16_t; };
-    template<> struct DtypeToType<Dtype::Float8_E4M3FN> { using type = float8_e4m3fn_t; };
-    template<> struct DtypeToType<Dtype::Float8_E5M2> { using type = float8_e5m2_t; };
     template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
     template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
     template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
+    template<> struct DtypeToType<Dtype::Float4_e2m1> { using type = float4_e2m1_t; };
+    template<> struct DtypeToType<Dtype::Float4_e2m1_2x> { using type = float4_e2m1_2x_t; };
 #endif
 
-// ✅ Runtime dispatcher using the simple type resolver
+//  Runtime dispatcher using the simple type resolver
 template<typename Func>
 static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
     switch(dtype) {
@@ -76,8 +75,6 @@ static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
         case Dtype::Float64:  return f(typename DtypeToType<Dtype::Float64>::type{});
         case Dtype::Bfloat16: return f(typename DtypeToType<Dtype::Bfloat16>::type{});
         case Dtype::Float16:  return f(typename DtypeToType<Dtype::Float16>::type{});
-        case Dtype::Float8_E4M3FN: return f(typename DtypeToType<Dtype::Float8_E4M3FN>::type{});
-        case Dtype::Float8_E5M2:   return f(typename DtypeToType<Dtype::Float8_E5M2>::type{});
         case Dtype::Bool:   return f(typename DtypeToType<Dtype::Bool>::type{});
         case Dtype::UInt8: return f(typename DtypeToType<Dtype::UInt8>::type{});
         case Dtype::UInt16: return f(typename DtypeToType<Dtype::UInt16>::type{});
@@ -86,6 +83,8 @@ static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
         case Dtype::Complex32: return f(typename DtypeToType<Dtype::Complex32>::type{});
         case Dtype::Complex64: return f(typename DtypeToType<Dtype::Complex64>::type{});
         case Dtype::Complex128: return f(typename DtypeToType<Dtype::Complex128>::type{});
+        // case Dtype::Float4_e2m1: return f(typename DtypeToType<Dtype::Float4_e2m1>::type{});
+        // case Dtype::Float4_e2m1_2x: return f(typename DtypeToType<Dtype::Float4_e2m1_2x>::type{});
         default:
             throw std::runtime_error("Unsupported Dtype");
     }

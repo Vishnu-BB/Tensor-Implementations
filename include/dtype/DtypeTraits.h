@@ -10,8 +10,9 @@
 #include <string>
 #include "core/Tensor.h"
 #include <cassert>
-// ✅ ALWAYS use custom structs (both CPU and GPU compilation)
+//  ALWAYS use custom structs (both CPU and GPU compilation)
 #include "dtype/Types.h"
+#include "dtype/fp4.h"
 
 // ═══════════════════════════════════════════════════════════
 // DTYPE TRAITS
@@ -140,6 +141,24 @@ template<> struct dtype_traits<Dtype::UInt64> {
         static constexpr bool is_unsigned = false;
     };
 
+    template <> struct dtype_traits<Dtype::Float4_e2m1> {
+        using type = float4_e2m1_t;
+        static constexpr size_t size = sizeof(float4_e2m1_t); // 1 byte storage
+        static constexpr const char* name = "float4_e2m1";
+        static constexpr bool is_floating_point = true;
+        static constexpr bool is_integral = false;
+        static constexpr bool is_unsigned = false;
+    };
+
+    template <> struct dtype_traits<Dtype::Float4_e2m1_2x> {
+        using type = float4_e2m1_2x_t;
+        static constexpr size_t size = sizeof(float4_e2m1_2x_t); // 1 byte storage (2 packed)
+        static constexpr const char* name = "float4_e2m1_2x";
+        static constexpr bool is_floating_point = true;
+        static constexpr bool is_integral = false;
+        static constexpr bool is_unsigned = false;
+    };
+
     // bool specialization
     template<> struct dtype_traits<Dtype::Bool> {
         static constexpr const char* name = "bool";
@@ -183,28 +202,6 @@ template<> struct dtype_traits<Dtype::UInt64> {
         static constexpr bool is_unsigned = false;
         static constexpr bool is_complex = true;
     };
-
-    // FP8 Types (8-bit Floating Point for Deep Learning)
-    template<> struct dtype_traits<Dtype::Float8_E4M3FN> {
-        using type = float8_e4m3fn_t;  // Will define this struct in Types.h
-        static constexpr size_t size = sizeof(uint8_t);  // 1 byte
-        static constexpr const char* name = "float8_e4m3fn";
-        static constexpr bool is_floating_point = true;
-        static constexpr bool is_integral = false;
-        static constexpr bool is_unsigned = false;
-        static constexpr bool is_complex = false;
-    };
-
-    template<> struct dtype_traits<Dtype::Float8_E5M2> {
-        using type = float8_e5m2_t;  // Will define this struct in Types.h
-        static constexpr size_t size = sizeof(uint8_t);  // 1 byte
-        static constexpr const char* name = "float8_e5m2";
-        static constexpr bool is_floating_point = true;
-        static constexpr bool is_integral = false;
-        static constexpr bool is_unsigned = false;
-        static constexpr bool is_complex = false;
-    };
-
     // Helper function
     template<typename T>
     bool is_same_type(Dtype dtype) {
@@ -236,12 +233,6 @@ template<> struct dtype_traits<Dtype::UInt64> {
         } else if constexpr (std::is_same_v<T, bfloat16_t>) {
             return dtype == Dtype::Bfloat16;
         }
-        else if constexpr (std::is_same_v<T, float8_e4m3fn_t>) {
-            return dtype == Dtype::Float8_E4M3FN;
-        }
-        else if constexpr (std::is_same_v<T, float8_e5m2_t>) {
-            return dtype == Dtype::Float8_E5M2;
-        }
         else if constexpr (std::is_same_v<T, bool>) {
             return dtype == Dtype::Bool;
         }else if constexpr (std::is_same_v<T, complex32_t>){
@@ -250,6 +241,10 @@ template<> struct dtype_traits<Dtype::UInt64> {
             return dtype == Dtype::Complex64;
         }else if constexpr (std::is_same_v<T, complex128_t>){
             return dtype == Dtype::Complex128;
+        } else if constexpr (std::is_same_v<T, float4_e2m1_t>) {
+            return dtype == Dtype::Float4_e2m1;
+        } else if constexpr (std::is_same_v<T, float4_e2m1_2x_t>) {
+            return dtype == Dtype::Float4_e2m1_2x;
         }
         return false;
     }
@@ -291,13 +286,6 @@ template<> struct dtype_traits<Dtype::UInt64> {
         else if constexpr (std::is_same_v<T, bfloat16_t>) {
             return Dtype::Bfloat16;
         }
-        // FP8 types
-        else if constexpr (std::is_same_v<T, float8_e4m3fn_t>) {
-            return Dtype::Float8_E4M3FN;
-        }
-        else if constexpr (std::is_same_v<T, float8_e5m2_t>) {
-            return Dtype::Float8_E5M2;
-        }
         else if constexpr (std::is_same_v<T, float>) {
             return Dtype::Float32;
         }
@@ -315,6 +303,12 @@ template<> struct dtype_traits<Dtype::UInt64> {
         }else if constexpr (std::is_same_v<T,complex128_t> ){
             return Dtype::Complex128;
         }
+        else if constexpr (std::is_same_v<T, float4_e2m1_t>) {
+            return Dtype::Float4_e2m1;
+        }
+        else if constexpr (std::is_same_v<T, float4_e2m1_2x_t>) {
+            return Dtype::Float4_e2m1_2x;
+        }
         else {
             static_assert(!std::is_same_v<T, T>, "Unsupported type");
         }
@@ -330,8 +324,8 @@ template<> struct dtype_traits<Dtype::UInt64> {
         case Dtype::Bfloat16:
         case Dtype::Float32:
         case Dtype::Float64:
-        case Dtype::Float8_E4M3FN:
-        case Dtype::Float8_E5M2:
+        case Dtype::Float4_e2m1:
+        case Dtype::Float4_e2m1_2x:
             return true;
         default:
             return false;
@@ -393,105 +387,66 @@ template<> struct dtype_traits<Dtype::UInt64> {
             case Dtype::UInt64:   return "uint64";
             case Dtype::Float16:  return "float16";  
             case Dtype::Bfloat16: return "bfloat16";
-            case Dtype::Float8_E4M3FN: return "float8_e4m3fn";
-            case Dtype::Float8_E5M2:   return "float8_e5m2";
             case Dtype::Float32:  return "float32";
             case Dtype::Float64:  return "float64";
             case Dtype::Bool:     return "bool";
             case Dtype::Complex32: return "complex32";
             case Dtype::Complex64: return "complex64";
             case Dtype::Complex128: return "complex128";
-            default:              return "Unknown";  
+            case Dtype::Float4_e2m1: return "float4_e2m1";
+            case Dtype::Float4_e2m1_2x: return "float4_e2m1_2x";
+            default: return "Unknown";  
         }
     }
 
    // ═══════════════════════════════════════════════════════════
-// TYPE PROMOTION RULES
+// PYTORCH-COMPATIBLE TYPE PROMOTION RULES
 // ═══════════════════════════════════════════════════════════
 
 inline Dtype promote_dtypes_bool(Dtype a, Dtype b) {
     // Rule 1: If both are same type, return that type
     if (a == b) return a;
-
     // Rule 2: Complex types have highest priority
-    // If any input is complex, the result is complex. 
-    // The precision is determined by the highest precision input (real or complex).
-    bool is_complex_a = (a == Dtype::Complex128 || a == Dtype::Complex64 || a == Dtype::Complex32);
-    bool is_complex_b = (b == Dtype::Complex128 || b == Dtype::Complex64 || b == Dtype::Complex32);
-
-    if (is_complex_a || is_complex_b) {
-        // If one is Complex128 or Float64, result is Complex128
-        if (a == Dtype::Complex128 || b == Dtype::Complex128 || 
-            a == Dtype::Float64 || b == Dtype::Float64) {
-            return Dtype::Complex128;
-        }
-        // If one is Complex64 or Float32, result is Complex64
-        // Also promote Complex32 + Int64/Int32 to Complex64 to avoid overflow
-        // Also promote Complex32 + BFloat16 to Complex64 (BFloat16 has larger range than Float16)
-        if (a == Dtype::Complex64 || b == Dtype::Complex64 || 
-            a == Dtype::Float32 || b == Dtype::Float32 ||
-            a == Dtype::Bfloat16 || b == Dtype::Bfloat16 ||
-            a == Dtype::Int64 || b == Dtype::Int64 ||
-            a == Dtype::Int32 || b == Dtype::Int32) {
-            return Dtype::Complex64;
-        }
-        // Otherwise (Complex32 + Float16/BFloat16/Int16/Int8), result is Complex32
-        return Dtype::Complex32;
-    }
-
+if (a == Dtype::Complex128 || b == Dtype::Complex128) return Dtype::Complex128;
+if (a == Dtype::Complex64 || b == Dtype::Complex64) return Dtype::Complex64;
+if (a == Dtype::Complex32 || b == Dtype::Complex32) return Dtype::Complex32;
     // Rule 3: Floating point always wins (highest precision first)
     if (a == Dtype::Float64 || b == Dtype::Float64) return Dtype::Float64;
-    
-    // Special Case: Int64 + Float32 -> Float64 (Preserve precision)
-    bool has_int64 = (a == Dtype::Int64 || b == Dtype::Int64);
-    bool has_float32 = (a == Dtype::Float32 || b == Dtype::Float32);
-    if (has_int64 && has_float32) return Dtype::Float64;
-
     if (a == Dtype::Float32 || b == Dtype::Float32) return Dtype::Float32;
-    
-    // Special Case: Float16 + BFloat16 -> Float32
-    bool has_f16 = (a == Dtype::Float16 || b == Dtype::Float16);
-    bool has_bf16 = (a == Dtype::Bfloat16 || b == Dtype::Bfloat16);
-    if (has_f16 && has_bf16) return Dtype::Float32;
-
-    if (has_f16) return Dtype::Float16;
-    if (has_bf16) return Dtype::Bfloat16;
+    if (a == Dtype::Float16 || b == Dtype::Float16) return Dtype::Float16;
+    if (a == Dtype::Bfloat16 || b == Dtype::Bfloat16) return Dtype::Bfloat16;
+    if (a == Dtype::Float4_e2m1 || b == Dtype::Float4_e2m1) return Dtype::Float4_e2m1;
+    if (a == Dtype::Float4_e2m1_2x || b == Dtype::Float4_e2m1_2x) return Dtype::Float4_e2m1_2x;
     
     // Rule 4: Integer promotion (largest size wins)
     if (a == Dtype::Int64 || b == Dtype::Int64) return Dtype::Int64;
     if (a == Dtype::Int32 || b == Dtype::Int32) return Dtype::Int32;
     if (a == Dtype::Int16 || b == Dtype::Int16) return Dtype::Int16;
-    
-    // Special Case: Int8 + UInt8 -> Int16 (Safe promotion)
-    bool has_int8 = (a == Dtype::Int8 || b == Dtype::Int8);
-    bool has_uint8 = (a == Dtype::UInt8 || b == Dtype::UInt8);
-    if (has_int8 && has_uint8) return Dtype::Int16;
+    if (a == Dtype::Int8 || b== Dtype::Int8) return Dtype::Int8;
+     // Only allow uint8 promotion; others fallback to error/unknown
+     if (a==Dtype::UInt8 || b==Dtype::UInt8) return Dtype::UInt8;
+       // For other unsigned types, handle as error, assert, or define explicit cast logic
+       if (a==Dtype::UInt16 || b==Dtype::UInt16 || a==Dtype::UInt32 || b==Dtype::UInt32 || a==Dtype::UInt64 || b==Dtype::UInt64) {
+        static_assert("Promotion for uint16, uint32, uint64 is not supported; cast required.");
 
-    if (has_int8) return Dtype::Int8;
-    
-    // Only allow uint8 promotion; others fallback to error/unknown
-    if (a == Dtype::UInt8 || b == Dtype::UInt8) return Dtype::UInt8;
-
-    // For other unsigned types, handle as error, assert, or define explicit cast logic
-    if (a==Dtype::UInt16 || b==Dtype::UInt16 || a==Dtype::UInt32 || b==Dtype::UInt32 || a==Dtype::UInt64 || b==Dtype::UInt64) {
-        throw std::runtime_error("Promotion for uint16, uint32, uint64 is not supported; cast required.");
-    }
-
+       }
     // Rule 5: Bool + Bool = Bool
     return Dtype::Bool;
 }
 
-// ✅ NEW: Special promotion for division (always promotes to float)
+//  NEW: Special promotion for division (always promotes to float)
 inline Dtype promote_dtypes_division(Dtype a, Dtype b) {
-    // ✅ CRITICAL: Division always promotes to float to avoid integer division issues
+    //  CRITICAL: Division always promotes to float to avoid integer division issues
     
     // If either is already float, use normal promotion
     if (a == Dtype::Float64 || b == Dtype::Float64) return Dtype::Float64;
     if (a == Dtype::Float32 || b == Dtype::Float32) return Dtype::Float32;
     if (a == Dtype::Float16 || b == Dtype::Float16) return Dtype::Float16;
     if (a == Dtype::Bfloat16 || b == Dtype::Bfloat16) return Dtype::Bfloat16;
+    if (a == Dtype::Float4_e2m1 || b == Dtype::Float4_e2m1) return Dtype::Float4_e2m1;
+    if (a == Dtype::Float4_e2m1_2x || b == Dtype::Float4_e2m1_2x) return Dtype::Float4_e2m1_2x;
     
-    // ✅ Otherwise, promote integers and bool to Float32
+    //  Otherwise, promote integers and bool to Float32
     // This matches PyTorch's behavior: Int16 / Bool → Float32
     return Dtype::Float32;
 }

@@ -247,35 +247,23 @@ namespace OwnTensor {
 
         dispatch_by_dtype(A.dtype(), [&](auto dummy){
             using T = decltype(dummy);
-            const T* a_ptr = A.data<T>();
-            const T* b_ptr = B.data<T>();
-            T* out_ptr = output.data<T>();
-
-            batched_matmul_kernel<<<grid, block, 0, stream>>>( //✨✨✨
-                a_ptr, b_ptr, out_ptr,
-                d_a_shape, d_b_shape, d_out_shape,
-                d_a_strides, d_b_strides, d_out_strides,
-                a_ndim, b_ndim, out_ndim, total_batches
-            );
             
-            //✨✨✨
-            // cudaError_t err = cudaGetLastError();
-            // if (err != cudaSuccess)
-            // {
-            //     // Free device memory before throwing
-            //     cudaFree(d_a_shape); cudaFree(d_b_shape); cudaFree(d_out_shape);
-            //     cudaFree(d_a_strides); cudaFree(d_b_strides); cudaFree(d_out_strides);
-            //     throw std::runtime_error("Batched Matmul Cuda Kernel Failed: " + 
-            //     std::string(cudaGetErrorString(err)));
-            // }
-
-            // err = cudaDeviceSynchronize();
-            // if (err != cudaSuccess) {
-            //     cudaFree(d_a_shape); cudaFree(d_b_shape); cudaFree(d_out_shape);
-            //     cudaFree(d_a_strides); cudaFree(d_b_strides); cudaFree(d_out_strides);
-            //     throw std::runtime_error("Batched Matmul Cuda Kernel Sync Failed: " + 
-            //         std::string(cudaGetErrorString(err)));
-            // }
+            // FP4 VALIDATION: No Matmul allowed
+            if constexpr (std::is_same_v<T, float4_e2m1_t> || std::is_same_v<T, float4_e2m1_2x_t>) {
+                throw std::runtime_error("Matrix Multiplication is not supported for FP4 types.");
+            } else {
+                const T* a_ptr = A.data<T>();
+                const T* b_ptr = B.data<T>();
+                T* out_ptr = output.data<T>();
+    
+                batched_matmul_kernel<<<grid, block, 0, stream>>>( 
+                    a_ptr, b_ptr, out_ptr,
+                    d_a_shape, d_b_shape, d_out_shape,
+                    d_a_strides, d_b_strides, d_out_strides,
+                    a_ndim, b_ndim, out_ndim, total_batches
+                );
+            }
+            
         });
 
         // Free device memory

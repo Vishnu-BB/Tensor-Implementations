@@ -21,6 +21,9 @@ inline constexpr Dtype get_promoted_dtype(Dtype input_dtype) {
         case Dtype::Complex64:
         case Dtype::Complex128:
             return input_dtype; // No promotion for complex types
+        case Dtype::Float4_e2m1:
+        case Dtype::Float4_e2m1_2x:
+            return Dtype::Float32; // Promote FP4 to FP32 for ops
         default:
             return input_dtype; // no promotion for float types
     }

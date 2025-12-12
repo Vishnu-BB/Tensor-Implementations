@@ -1,10 +1,11 @@
 #include <stdexcept>
 #include "core/Tensor.h"
 #include "ops/helpers/ConditionalOps.h"
-#include "ops/helpers/BroadcastUtils.h"  // ✅ For broadcast_rhs_to_lhs
+#include "ops/helpers/BroadcastUtils.h"  //  For broadcast_rhs_to_lhs
 #include "core/TensorDispatch.h"
 #include "dtype/Types.h"
-#include "dtype/DtypeTraits.h"  // ✅ For type_to_dtype and promote_dtypes_bool
+#include "dtype/fp4.h"
+#include "dtype/DtypeTraits.h"  //  For type_to_dtype and promote_dtypes_bool
 using namespace std;
 namespace OwnTensor {
 
@@ -26,10 +27,10 @@ namespace OwnTensor {
         throw std::runtime_error("All tensors must be on the same device");
     }
     
-    // ✅ Determine output dtype (promote input and other)
+    //  Determine output dtype (promote input and other)
     Dtype output_dtype = promote_dtypes_bool(input.dtype(), other.dtype());
     
-    // ✅ Compute output shape (broadcasting)
+    //  Compute output shape (broadcasting)
     Shape output_shape = condition.shape();
     if (condition.shape().dims != input.shape().dims || condition.shape().dims != other.shape().dims) {
         // Need to broadcast - compute the broadcasted shape

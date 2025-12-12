@@ -4,7 +4,7 @@
 #include "core/Tensor.h"
 #include "core/TensorDispatch.h"
 #include "dtype/Types.h"
-#include "dtype/DtypeTraits.h"  // ✅ For promote_dtypes_division
+#include "dtype/DtypeTraits.h"  //  For promote_dtypes_division
 
 namespace OwnTensor {
 namespace { // file-local helpers
@@ -50,8 +50,18 @@ inline double ld<uint16_t>(const uint16_t* p, size_t i, Dtype dt) {
     return static_cast<double>(load_u16_as_f32(p[i], dt));
 }
 
+template <>
+inline double ld<float4_e2m1_2x_t>(const float4_e2m1_2x_t*, size_t, Dtype) {
+    throw std::runtime_error("Cannot perform scalar operations on packed FP4 types");
+}
+
 template <typename T>
 inline void st(T* p, size_t i, double v, Dtype) { p[i] = static_cast<T>(v); }
+
+template <>
+inline void st<float4_e2m1_2x_t>(float4_e2m1_2x_t*, size_t, double, Dtype) {
+    throw std::runtime_error("Cannot perform scalar operations on packed FP4 types");
+}
 
 
 template <>
@@ -78,7 +88,7 @@ inline void apply_copy_to_bool(const T* src, uint8_t* dst, size_t n, Dtype dt, F
     }
 }
 
-// ✅ NEW: Helper to determine promoted dtype for division
+//  NEW: Helper to determine promoted dtype for division
 inline Dtype get_division_output_dtype(Dtype input_dtype) {
     // Bool → Float32
     if (input_dtype == Dtype::Bool) return Dtype::Float32;
@@ -90,7 +100,7 @@ inline Dtype get_division_output_dtype(Dtype input_dtype) {
     return input_dtype;
 }
 
-// ✅ NEW: Template function for cross-type division
+//  NEW: Template function for cross-type division
 template <typename SrcT, typename DstT>
 inline void apply_div_cross_type(const SrcT* src, DstT* dst, size_t n, Dtype src_dt, Dtype dst_dt, double s) {
     for (size_t i = 0; i < n; ++i) {
@@ -126,11 +136,11 @@ void cpu_mul_inplace(Tensor& t, double s) {
     });
 }
 
-// ✅ FIXED: Division in-place (check if promotion needed)
+//  FIXED: Division in-place (check if promotion needed)
 void cpu_div_inplace(Tensor& t, double s) {
     const Dtype dt = t.dtype();
     
-    // ✅ Check if this would require promotion
+    //  Check if this would require promotion
     Dtype promoted_dt = get_division_output_dtype(dt);
     if (promoted_dt != dt) {
         throw std::runtime_error(
@@ -175,7 +185,7 @@ Tensor cpu_mul_copy(const Tensor& a, double s) {
     return out;
 }
 
-// ✅ FIXED: Division creates Float32 output for integers/bool
+//  FIXED: Division creates Float32 output for integers/bool
 Tensor cpu_div_copy(const Tensor& a, double s) {
     const Dtype input_dt = a.dtype();
     const Dtype output_dt = get_division_output_dtype(input_dt);
@@ -219,7 +229,7 @@ Tensor cpu_sub_copy_scalar_tensor(double s, const Tensor& a) {
     return out;
 }
 
-// ✅ FIXED: Scalar / Tensor also promotes to float
+//  FIXED: Scalar / Tensor also promotes to float
 Tensor cpu_div_copy_scalar_tensor(double s, const Tensor& a) {
     const Dtype input_dt = a.dtype();
     const Dtype output_dt = get_division_output_dtype(input_dt);
