@@ -277,7 +277,7 @@ namespace OwnTensor
 
     size_t Tensor::nbytes() const 
     {
-        return numel() * dtype_size(dtype_); // data_size_
+        return numel() * size_t(dtype_); // data_size_
     }
 
     size_t Tensor::grad_nbytes() const {
@@ -445,53 +445,47 @@ namespace OwnTensor
     }
 
     Tensor& Tensor::copy_(const Tensor& src)
-        {
-            // Edge case: Self-copy is no-op
-            if (this == &src || data() == src.data()) return *this;
-            // Edge case: Empty tensor
-            if (numel() == 0 && src.numel() == 0) {
-                return *this;
-            }
-            // Edge case: Size validation
-            if (numel() != src.numel()) {
-                throw std::runtime_error(
-                    "copy_: size mismatch. Destination has " + 
-                    std::to_string(numel()) + " elements but source has " + 
-                    std::to_string(src.numel())
-                );
-            }
-            if (dtype_ != src.dtype_) {
-                throw std::runtime_error("copy_: dtype mismatch");
-            }
-            if (numel() == 0) return *this;
-            if (!is_contiguous() || storage_offset_ != 0) {
-                throw std::runtime_error("copy_: destination must be contiguous");
-            }
-            
-            // Materialize non-contiguous source
-            const Tensor* src_ptr = &src;
-            Tensor src_contig;
-            if (!src.is_contiguous() ) {
-                src_contig = src.contiguous();
-                src_ptr = &src_contig;
-            }
-            try {
-                device::copy_memory(
-                    // data(), device_.device,           // destination ptr and device
-                    // src_ptr->data(), src_ptr->device_.device,  // source ptr and device
-                    // nbytes()
-                    this->data(), 
-                    this->device_.device,           // destination ptr and device
-                    src_ptr->data(), 
-                    src_ptr->device_.device,  // source ptr and device
-                    src_ptr->nbytes()
-                );
-            } catch (const std::exception& e) {
-                throw std::runtime_error(std::string("copy_ failed: ") + e.what());
-            }
-            
+    {
+        // Edge case: Self-copy is no-op
+        if (this == &src || data() == src.data()) return *this;
+        // Edge case: Empty tensor
+        if (numel() == 0 && src.numel() == 0) {
             return *this;
         }
+        // Edge case: Size validation
+        if (numel() != src.numel()) {
+            throw std::runtime_error(
+                "copy_: size mismatch. Destination has " + 
+                std::to_string(numel()) + " elements but source has " + 
+                std::to_string(src.numel())
+            );
+        }
+        if (dtype_ != src.dtype_) {
+            throw std::runtime_error("copy_: dtype mismatch");
+        }
+        if (numel() == 0) return *this;
+        if (!is_contiguous() || storage_offset_ != 0) {
+            throw std::runtime_error("copy_: destination must be contiguous");
+        }
+        
+        // Materialize non-contiguous source
+        const Tensor* src_ptr = &src;
+        if (!src.is_contiguous() || src.storage_offset_ != 0) {
+            Tensor src_contig = src.contiguous();
+            src_ptr = &src_contig;
+        }
+        try {
+            device::copy_memory(
+                data(), device_.device,           // destination ptr and device
+                src_ptr->data(), src_ptr->device_.device,  // source ptr and device
+                nbytes()
+            );
+        } catch (const std::exception& e) {
+            throw std::runtime_error(std::string("copy_ failed: ") + e.what());
+        }
+        
+        return *this;
+    }
 
     size_t Tensor::storage_offset() const 
     {
@@ -501,23 +495,23 @@ namespace OwnTensor
     // Determine element size based on data type
     size_t Tensor::dtype_size(Dtype d) {
         switch(d) {
-            case Dtype::Bool:           return 1;
-            case Dtype::Int8:           return dtype_traits<Dtype::Int8>::size;
-            case Dtype::Int16:          return dtype_traits<Dtype::Int16>::size;
-            case Dtype::Int32:          return dtype_traits<Dtype::Int32>::size;
-            case Dtype::Int64:          return dtype_traits<Dtype::Int64>::size;
-            case Dtype::UInt8:          return dtype_traits<Dtype::UInt8>::size;
-            case Dtype::UInt16:         return dtype_traits<Dtype::UInt16>::size;
-            case Dtype::UInt32:         return dtype_traits<Dtype::UInt32>::size;
-            case Dtype::UInt64:         return dtype_traits<Dtype::UInt64>::size;
-            case Dtype::Bfloat16:       return dtype_traits<Dtype::Bfloat16>::size;
-            case Dtype::Float16:        return dtype_traits<Dtype::Float16>::size;
-            case Dtype::Float32:        return dtype_traits<Dtype::Float32>::size;
-            case Dtype::Float64:        return dtype_traits<Dtype::Float64>::size;
-            case Dtype::Complex32:      return dtype_traits<Dtype::Complex32>::size;
-            case Dtype::Complex64:      return dtype_traits<Dtype::Complex64>::size;
-            case Dtype::Complex128:     return dtype_traits<Dtype::Complex128>::size;
-            case Dtype::Float4_e2m1:    return dtype_traits<Dtype::Float4_e2m1>::size;
+            case Dtype::Bool: return 1;
+            case Dtype::Int8: return dtype_traits<Dtype::Int8>::size;
+            case Dtype::Int16: return dtype_traits<Dtype::Int16>::size;
+            case Dtype::Int32: return dtype_traits<Dtype::Int32>::size;
+            case Dtype::Int64: return dtype_traits<Dtype::Int64>::size;
+            case Dtype::UInt8: return dtype_traits<Dtype::UInt8>::size;
+            case Dtype::UInt16: return dtype_traits<Dtype::UInt16>::size;
+            case Dtype::UInt32: return dtype_traits<Dtype::UInt32>::size;
+            case Dtype::UInt64: return dtype_traits<Dtype::UInt64>::size;
+            case Dtype::Bfloat16: return dtype_traits<Dtype::Bfloat16>::size;
+            case Dtype::Float16: return dtype_traits<Dtype::Float16>::size;
+            case Dtype::Float32: return dtype_traits<Dtype::Float32>::size;
+            case Dtype::Float64: return dtype_traits<Dtype::Float64>::size;
+            case Dtype::Complex32: return dtype_traits<Dtype::Complex32>::size;
+            case Dtype::Complex64: return dtype_traits<Dtype::Complex64>::size;
+            case Dtype::Complex128: return dtype_traits<Dtype::Complex128>::size;
+            case Dtype::Float4_e2m1: return dtype_traits<Dtype::Float4_e2m1>::size;
             case Dtype::Float4_e2m1_2x: return dtype_traits<Dtype::Float4_e2m1_2x>::size;
             default: throw std::runtime_error("Unsupported data type");
         }
@@ -690,41 +684,6 @@ Tensor Tensor::to_bool() const {
     // template void Tensor::set_data<float4_e2m1_t>(const std::vector<float4_e2m1_t>&);
     // template void Tensor::set_data<float4_e2m1_2x_t>(const std::vector<float4_e2m1_2x_t>&);
     
-
-    // Explicit instantiations for set_grad
-    template void Tensor::set_grad<bool>(const std::vector<bool>&);
-    template void Tensor::set_grad<int8_t>(const std::vector<int8_t>&);
-    template void Tensor::set_grad<int16_t>(const std::vector<int16_t>&);
-    template void Tensor::set_grad<int32_t>(const std::vector<int32_t>&);
-    template void Tensor::set_grad<int64_t>(const std::vector<int64_t>&);
-    template void Tensor::set_grad<float>(const std::vector<float>&);
-    template void Tensor::set_grad<double>(const std::vector<double>&);
-    template void Tensor::set_grad<uint8_t>(const std::vector<uint8_t>&);
-    template void Tensor::set_grad<uint16_t>(const std::vector<uint16_t>&);
-    template void Tensor::set_grad<uint32_t>(const std::vector<uint32_t>&);
-    template void Tensor::set_grad<uint64_t>(const std::vector<uint64_t>&);
-    template void Tensor::set_grad<float16_t>(const std::vector<float16_t>&);
-    template void Tensor::set_grad<bfloat16_t>(const std::vector<bfloat16_t>&);
-    template void Tensor::set_grad<complex32_t>(const std::vector<complex32_t>&);
-    template void Tensor::set_grad<complex64_t>(const std::vector<complex64_t>&);
-    template void Tensor::set_grad<complex128_t>(const std::vector<complex128_t>&);
-
-    // Explicit instantiations for fill_grad
-    template void Tensor::fill_grad<bool>(bool);
-    template void Tensor::fill_grad<int16_t>(int16_t);
-    template void Tensor::fill_grad<int32_t>(int32_t);
-    template void Tensor::fill_grad<int64_t>(int64_t);
-    template void Tensor::fill_grad<uint8_t>(uint8_t);
-    template void Tensor::fill_grad<uint16_t>(uint16_t);
-    template void Tensor::fill_grad<uint32_t>(uint32_t);
-    template void Tensor::fill_grad<uint64_t>(uint64_t);
-    template void Tensor::fill_grad<float>(float);
-    template void Tensor::fill_grad<double>(double);
-    template void Tensor::fill_grad<float16_t>(float16_t);
-    template void Tensor::fill_grad<bfloat16_t>(bfloat16_t);
-    template void Tensor::fill_grad<complex32_t>(complex32_t);
-    template void Tensor::fill_grad<complex64_t>(complex64_t);
-    template void Tensor::fill_grad<complex128_t>(complex128_t);
 
     // Explicit instantiations for fill
     template void Tensor::fill<bool>(bool);

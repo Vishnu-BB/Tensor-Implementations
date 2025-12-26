@@ -126,23 +126,9 @@ namespace OwnTensor
         }
 
         template<typename T>
-        T* grad()
-        {
-            if(!grad_ptr_) return nullptr;
-            return reinterpret_cast<T*>(grad_ptr_.get());
-        }
-
-        template<typename T>
         const T* data() const
         {
             return reinterpret_cast<const T*>(data_ptr_.get() + storage_offset_);
-        }
-                
-        template<typename T>
-        const T* grad() const
-        {
-            if(!grad_ptr_) return nullptr;
-            return reinterpret_cast<const T*>(grad_ptr_.get());
         }
 
         // ######################################################
@@ -196,19 +182,7 @@ namespace OwnTensor
         void set_data(std::initializer_list<T> values);
 
         template <typename T>
-        void set_grad(const T* source_data, size_t count);
-
-        template<typename T>
-        void set_grad(const std::vector<T>& source_data);
-
-        template <typename T>
-        void set_grad(std::initializer_list<T> values);
-
-        template <typename T>
         void fill(T value);
-
-        template <typename T>
-        void fill_grad(T value);
 
         //######################################################
         // Factory Functions
