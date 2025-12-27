@@ -12,6 +12,11 @@ namespace OwnTensor {
     Tensor operator*=(Tensor& lhs, const Tensor& rhs);
     Tensor operator/=(Tensor& lhs, const Tensor& rhs);
 
+    Tensor operator+=(Tensor&& lhs, const Tensor& rhs);
+    Tensor operator-=(Tensor&& lhs, const Tensor& rhs);
+    Tensor operator*=(Tensor&& lhs, const Tensor& rhs);
+    Tensor operator/=(Tensor&& lhs, const Tensor& rhs);
+
     // Element-wise comparisons (return Bool tensors)
     Tensor operator==(const Tensor& lhs, const Tensor& rhs);
     Tensor operator!=(const Tensor& lhs, const Tensor& rhs);

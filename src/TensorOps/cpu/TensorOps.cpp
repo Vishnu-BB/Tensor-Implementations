@@ -213,6 +213,8 @@ Tensor operator+=(Tensor& lhs, const Tensor& rhs)
     return lhs;
 }
 
+Tensor operator+=(Tensor&& lhs, const Tensor& rhs) { return lhs += rhs; }
+
 Tensor operator-=(Tensor& lhs, const Tensor& rhs)
 {
     if (lhs.dtype() != rhs.dtype()) {
@@ -252,6 +254,8 @@ Tensor operator-=(Tensor& lhs, const Tensor& rhs)
     return lhs;
 }
 
+Tensor operator-=(Tensor&& lhs, const Tensor& rhs) { return lhs -= rhs; }
+
 Tensor operator*=(Tensor& lhs, const Tensor& rhs)
 {
     if (lhs.dtype() != rhs.dtype()) {
@@ -290,6 +294,8 @@ Tensor operator*=(Tensor& lhs, const Tensor& rhs)
     }
     return lhs;
 }
+
+Tensor operator*=(Tensor&& lhs, const Tensor& rhs) { return lhs *= rhs; }
 
 Tensor operator/=(Tensor& lhs, const Tensor& rhs)
 {
@@ -332,6 +338,9 @@ Tensor operator/=(Tensor& lhs, const Tensor& rhs)
     }
     return lhs;
 }
+
+Tensor operator/=(Tensor&& lhs, const Tensor& rhs) { return lhs /= rhs; }
+
    // ============================================================================
 // COMPARISON OPERATORS WITH TYPE PROMOTION (Fixed Version)
 // ============================================================================

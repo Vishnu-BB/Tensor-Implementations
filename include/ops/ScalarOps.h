@@ -9,6 +9,11 @@ template<typename S> Tensor& operator-=(Tensor& tensor, S scalar);
 template<typename S> Tensor& operator*=(Tensor& tensor, S scalar);
 template<typename S> Tensor& operator/=(Tensor& tensor, S scalar);
 
+template<typename S> Tensor operator+=(Tensor&& tensor, S scalar);
+template<typename S> Tensor operator-=(Tensor&& tensor, S scalar);
+template<typename S> Tensor operator*=(Tensor&& tensor, S scalar);
+template<typename S> Tensor operator/=(Tensor&& tensor, S scalar);
+
 // Tensor (lhs) ⊗ Scalar (rhs)
 template<typename S> Tensor operator+(const Tensor& tensor, S scalar);
 template<typename S> Tensor operator-(const Tensor& tensor, S scalar);
