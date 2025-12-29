@@ -218,12 +218,12 @@ void cuda_bool_geq_outplace(const Tensor &A, const Tensor &B, Tensor &output, cu
             size_t *d_a_shape, *d_b_shape, *d_out_shape;
             size_t *d_a_strides, *d_b_strides, *d_out_strides;
             
-            cudaMalloc(&d_a_shape, a_ndim * sizeof(size_t));
-            cudaMalloc(&d_b_shape, b_ndim * sizeof(size_t));
-            cudaMalloc(&d_out_shape, out_ndim * sizeof(size_t));
-            cudaMalloc(&d_a_strides, a_ndim * sizeof(size_t));
-            cudaMalloc(&d_b_strides, b_ndim * sizeof(size_t));
-            cudaMalloc(&d_out_strides, out_ndim * sizeof(size_t));
+            cudaMallocAsync(&d_a_shape, a_ndim * sizeof(size_t), stream);
+            cudaMallocAsync(&d_b_shape, b_ndim * sizeof(size_t), stream);
+            cudaMallocAsync(&d_out_shape, out_ndim * sizeof(size_t), stream);
+            cudaMallocAsync(&d_a_strides, a_ndim * sizeof(size_t), stream);
+            cudaMallocAsync(&d_b_strides, b_ndim * sizeof(size_t), stream);
+            cudaMallocAsync(&d_out_strides, out_ndim * sizeof(size_t), stream);
             
             cudaMemcpyAsync(d_a_shape, a_shape.data(), a_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
             cudaMemcpyAsync(d_b_shape, b_shape.data(), b_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
@@ -239,12 +239,12 @@ void cuda_bool_geq_outplace(const Tensor &A, const Tensor &B, Tensor &output, cu
                 a_ndim, b_ndim, out_ndim, total_elems
             );
             
-            cudaFree(d_a_shape);
-            cudaFree(d_b_shape);
-            cudaFree(d_out_shape);
-            cudaFree(d_a_strides);
-            cudaFree(d_b_strides);
-            cudaFree(d_out_strides);
+            cudaFreeAsync(d_a_shape, stream);
+            cudaFreeAsync(d_b_shape, stream);
+            cudaFreeAsync(d_out_shape, stream);
+            cudaFreeAsync(d_a_strides, stream);
+            cudaFreeAsync(d_b_strides, stream);
+            cudaFreeAsync(d_out_strides, stream);
         } });
     }
         //✨✨✨

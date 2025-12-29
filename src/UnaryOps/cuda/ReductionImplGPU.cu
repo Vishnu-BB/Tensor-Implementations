@@ -28,15 +28,16 @@ namespace detail {
 class DeviceArray {
 public:
     int64_t* ptr;
+    cudaStream_t stream_; //~change
     
-    DeviceArray(const std::vector<int64_t>& host_data, cudaStream_t stream) {//✨✨✨
+    DeviceArray(const std::vector<int64_t>& host_data, cudaStream_t stream) : stream_(stream) {
         size_t bytes = host_data.size() * sizeof(int64_t);
-        cudaMalloc(&ptr, bytes);
-        cudaMemcpyAsync(ptr, host_data.data(), bytes, cudaMemcpyHostToDevice, stream);//✨✨✨
+        cudaMallocAsync(&ptr, bytes, stream_);
+        cudaMemcpyAsync(ptr, host_data.data(), bytes, cudaMemcpyHostToDevice, stream_);
     }
     
     ~DeviceArray() {
-        if (ptr) cudaFree(ptr);
+        if (ptr) cudaFreeAsync(ptr, stream_);
     }
     
     DeviceArray(const DeviceArray&) = delete;
@@ -153,7 +154,7 @@ Tensor dispatch_reduction_gpu(const Tensor& input,
                                cudaGetErrorString(err));
     }
     
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
     
     return output;
 }
@@ -470,7 +471,7 @@ Tensor dispatch_variance_gpu(const Tensor& input,
                                cudaGetErrorString(err));
     }
     
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
     return output;
 }
 

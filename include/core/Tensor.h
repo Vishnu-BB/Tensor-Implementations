@@ -80,7 +80,7 @@ namespace OwnTensor
         Tensor(Shape shape, TensorOptions opts);
 
         //✨✨✨
-        Tensor(Shape shape, bool requires_grad)
+        Tensor(Shape shape, bool requires_grad = false)
         : Tensor(shape, Dtype::Float32, DeviceIndex(Device::CPU), requires_grad) {}
 
         Tensor() = default;

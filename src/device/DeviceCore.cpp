@@ -44,15 +44,27 @@ namespace OwnTensor{
         }
 
     }
+
+    namespace cuda {
+
+        static thread_local cudaStream_t g_current_stream = 0; // Default is stream 0
+
+        void setCurrentStream(cudaStream_t stream) {
+            g_current_stream = stream;
+        }
+        cudaStream_t getCurrentStream() {
+            return g_current_stream;
+        }
+    }
 }
 //✨✨✨
-namespace OwnTensor::cuda {
-    static thread_local cudaStream_t g_current_stream = 0; // Default is stream 0
+// namespace OwnTensor::cuda {
+//     static thread_local cudaStream_t g_current_stream = 0; // Default is stream 0
 
-    void setCurrentStream(cudaStream_t stream) {
-        g_current_stream = stream;
-    }
-    cudaStream_t getCurrentStream() {
-        return g_current_stream;
-    }
-}
+//     void setCurrentStream(cudaStream_t stream) {
+//         g_current_stream = stream;
+//     }
+//     cudaStream_t getCurrentStream() {
+//         return g_current_stream;
+//     }
+// }

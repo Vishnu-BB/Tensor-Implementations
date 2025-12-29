@@ -370,8 +370,8 @@ namespace OwnTensor
                 int64_t* d_dims = nullptr;
                 int64_t* d_strides = nullptr;
                 
-                cudaMalloc(&d_dims, D * sizeof(int64_t));
-                cudaMalloc(&d_strides, D * sizeof(int64_t));
+                cudaMallocAsync(&d_dims, D * sizeof(int64_t), stream);
+                cudaMallocAsync(&d_strides, D * sizeof(int64_t), stream);
                 
                 cudaMemcpy(d_dims, shape_.dims.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
                 cudaMemcpy(d_strides, stride_.strides.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
@@ -388,16 +388,16 @@ namespace OwnTensor
 
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) {
-                    cudaFree(d_dims);
-                    cudaFree(d_strides);
+                    cudaFreeAsync(d_dims, stream);
+                    cudaFreeAsync(d_strides, stream);
                     throw std::runtime_error(std::string("contiguous kernel launch failed: ")
                                             + cudaGetErrorString(err));
                 }
                 
                 // Synchronize and clean up
                 // cudaDeviceSynchronize();//✨✨✨
-                cudaFree(d_dims);
-                cudaFree(d_strides);
+                cudaFreeAsync(d_dims, stream);
+                cudaFreeAsync(d_strides, stream);
                 
                 return out;
             }

@@ -410,7 +410,7 @@ Tensor cuda_div_copy_scalar_tensor(double s, const Tensor& a, cudaStream_t strea
     
     int host_flag = 0;
     int* dev_flag = nullptr;
-    cudaMalloc(&dev_flag, sizeof(int));
+    cudaMallocAsync(&dev_flag, sizeof(int), stream);
     cudaMemsetAsync(dev_flag, 0, sizeof(int), stream);
     
     if (input_dt == output_dt) {
@@ -438,7 +438,7 @@ Tensor cuda_div_copy_scalar_tensor(double s, const Tensor& a, cudaStream_t strea
     
     ckerr("k_div_copy_scalar_tensor");
     cudaMemcpyAsync(&host_flag, dev_flag, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaFree(dev_flag);
+    cudaFreeAsync(dev_flag, stream);
     
     if (host_flag) throw std::runtime_error("Division by zero in scalar / tensor");
     

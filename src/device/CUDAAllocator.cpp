@@ -1,6 +1,7 @@
 #include "device/CUDAAllocator.h"
 #include <iostream>
 #include <stdexcept>
+#include "device/DeviceCore.h"
 
 #ifdef WITH_CUDA
 #include <cuda_runtime.h>
@@ -11,7 +12,8 @@ namespace OwnTensor
     void* CUDAAllocator::allocate(size_t bytes) {
     #ifdef WITH_CUDA
         void* ptr = nullptr;
-        cudaError_t err = cudaMalloc(&ptr, bytes);
+        cudaStream_t stream = OwnTensor::cuda::getCurrentStream(); //~change
+        cudaError_t err = cudaMallocAsync(&ptr,bytes, stream); //~change
         if (err != cudaSuccess || ptr == nullptr)
         {
             std::cerr << "CUDA Allocation Failed: " << cudaGetErrorString(err) 
@@ -43,7 +45,8 @@ namespace OwnTensor
     #ifdef WITH_CUDA
         if (ptr) {
             // cudaDeviceSynchronize();//✨✨✨
-            cudaError_t err = cudaFree(ptr);
+            cudaStream_t stream = OwnTensor::cuda::getCurrentStream(); //~change
+            cudaError_t err = cudaFreeAsync(ptr, stream); //~change
             if (err != cudaSuccess) {
                 std::string error_msg = std::string("CUDA free failed: ") + cudaGetErrorString(err);
                 std::cerr << error_msg << std::endl;
@@ -75,15 +78,17 @@ namespace OwnTensor
 
     void CUDAAllocator::memset(void* ptr, int value, size_t bytes) {
     #ifdef WITH_CUDA
-        memsetAsync(ptr, value, bytes, 0);//✨✨✨
-        cudaStreamSynchronize(0);
+       cudaStream_t stream = OwnTensor::cuda::getCurrentStream(); //~change
+        memsetAsync(ptr, value, bytes, stream); //~change
+        // cudaStreamSynchronize(0);
     #endif
     }
 
     void CUDAAllocator::memcpy(void* dst, const void* src, size_t bytes, cudaMemcpyKind kind) {
     #ifdef WITH_CUDA
-        memcpyAsync(dst, src, bytes, kind, 0);//✨✨✨
-        cudaStreamSynchronize(0);
+        cudaStream_t stream = OwnTensor::cuda::getCurrentStream(); //~change
+        memcpyAsync(dst, src, bytes, kind, stream); //~change
+        // cudaStreamSynchronize(0);
     #endif
     }
 }
