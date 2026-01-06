@@ -7,22 +7,22 @@ namespace OwnTensor
 {
     Tensor Tensor::as_type(Dtype new_dtype) const {
         // Edge Case: If types are the same, just return a clone
-        if (new_dtype == this->dtype_) {
+        if (new_dtype == this->dtype()) {
             return this->clone();
         }
 
         //  Validation: Prevent invalid complex/scalar conversions
-        bool src_is_complex = is_complex(this->dtype_);
+        bool src_is_complex = is_complex(this->dtype());
         bool dst_is_complex = is_complex(new_dtype);
         if (src_is_complex != dst_is_complex) {
             throw std::runtime_error(
                 "Cannot convert between complex and non-complex types. " +
-                get_dtype_name(this->dtype_) + " -> " + get_dtype_name(new_dtype)
+                get_dtype_name(this->dtype()) + " -> " + get_dtype_name(new_dtype)
             );
         }
 
         // 1. Create the destination tensor on the SAME device
-        Tensor new_tensor(this->shape_, TensorOptions{new_dtype, this->device_});
+        Tensor new_tensor(this->shape(), TensorOptions{new_dtype, this->device()});
 
         // 2. Get element count
         const size_t n = this->numel();
@@ -36,12 +36,12 @@ namespace OwnTensor
                 Tensor cpu_source = this->to_cpu();
                 
                 // Step 3b: Convert on CPU
-                const auto* src_untyped_ptr = cpu_source.data_ptr_.get();
+                const auto* src_untyped_ptr = cpu_source.data();
                 std::vector<uint8_t> cpu_converted(n * Tensor::dtype_size(new_dtype));
                 auto* dst_untyped_ptr = cpu_converted.data();
                 
                 // Nested dispatch for type conversion (CPU)
-                dispatch_by_dtype(this->dtype_, [&](auto src_type_placeholder) {
+                dispatch_by_dtype(this->dtype(), [&](auto src_type_placeholder) {
                     using SrcType = decltype(src_type_placeholder);
                     const auto* src_data = reinterpret_cast<const SrcType*>(src_untyped_ptr);
 
@@ -91,7 +91,7 @@ namespace OwnTensor
                 
                 // Step 3c: Copy converted data from CPU → GPU
                 device::copy_memory(
-                    new_tensor.data_ptr_.get(), this->device_.device,  // GPU destination
+                    new_tensor.data(), this->device().device,  // GPU destination
                     cpu_converted.data(), Device::CPU,                  // CPU source
                     cpu_converted.size()
                 );
@@ -100,11 +100,11 @@ namespace OwnTensor
             #endif
         } else {
             //  4. Handle CPU tensors (original logic)
-            const auto* src_untyped_ptr = this->data_ptr_.get();
-            auto* dst_untyped_ptr = new_tensor.data_ptr_.get();
+            const auto* src_untyped_ptr = this->data();
+            auto* dst_untyped_ptr = new_tensor.data();
 
             // Nested dispatch for type conversion
-            dispatch_by_dtype(this->dtype_, [&](auto src_type_placeholder) {
+            dispatch_by_dtype(this->dtype(), [&](auto src_type_placeholder) {
                 using SrcType = decltype(src_type_placeholder);
                 const auto* src_data = reinterpret_cast<const SrcType*>(src_untyped_ptr);
 

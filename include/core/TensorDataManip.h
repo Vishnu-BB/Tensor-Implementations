@@ -26,13 +26,13 @@ namespace OwnTensor {
             throw std::runtime_error("Data size does not match tensor size");
         }
 
-        if (!is_same_type<T>(dtype_))
+        if (!is_same_type<T>(dtype()))
         {
             throw std::runtime_error("Datatype mismatch");
         }
 
         // Use device-aware copy for standard types
-        device::copy_memory(data_ptr_.get(), device_.device,
+        device::copy_memory(data(), device().device,
                            source_data, Device::CPU,
                            count * sizeof(T));
     }
@@ -45,13 +45,13 @@ namespace OwnTensor {
             throw std::runtime_error("Data size does not match tensor size");
         }
 
-        if (!is_same_type<T>(dtype_))
+        if (!is_same_type<T>(dtype()))
         {
             throw std::runtime_error("Datatype mismatch");
         }
 
         // Use device-aware copy for standard types
-        device::copy_memory(grad_ptr_.get(), device_.device,
+        device::copy_memory(grad(), device().device,
                            source_data, Device::CPU,
                            count * sizeof(T));
     }
@@ -73,13 +73,13 @@ namespace OwnTensor {
     {
         //  STRICT TYPE CHECKING: Match behavior of set_data()
         // Throw error if input type doesn't match tensor's dtype
-        if (!is_same_type<T>(dtype_)) {
+        if (!is_same_type<T>(dtype())) {
             throw std::runtime_error("Fill: Datatype mismatch - input type must match tensor dtype");
         }
 
-        if (device_.is_cpu()) {
-            // Now safe to reinterpret_cast since we checked type match
-            T* data = reinterpret_cast<T*>(data_ptr_.get());
+        if (device().is_cpu()) {
+            // Now safe to reinterpret_cast
+            T* data = reinterpret_cast<T*>(this->data());
             for (size_t i = 0; i < numel(); ++i) {
                 data[i] = value;
             }
@@ -95,13 +95,13 @@ namespace OwnTensor {
     {
         //  STRICT TYPE CHECKING: Match behavior of set_grad()
         // Throw error if input type doesn't match tensor's dtype
-        if (!is_same_type<T>(dtype_)) {
+        if (!is_same_type<T>(dtype())) {
             throw std::runtime_error("Fill: Datatype mismatch - input type must match tensor dtype");
         }
 
-        if (device_.is_cpu()) {
-            // Now safe to reinterpret_cast since we checked type match
-            T* data = reinterpret_cast<T*>(grad_ptr_.get());
+        if (device().is_cpu()) {
+            // Now safe to reinterpret_cast
+            T* data = reinterpret_cast<T*>(grad());
             for (size_t i = 0; i < numel(); ++i) {
                 data[i] = value;
             }
@@ -134,7 +134,7 @@ namespace OwnTensor {
         if (count != numel()) {
             throw std::runtime_error("Data size does not match tensor size");
         }
-        if (!is_same_type<float16_t>(dtype_)) {
+        if (!is_same_type<float16_t>(dtype())) {
             throw std::runtime_error("Datatype mismatch");
         }
 
@@ -147,7 +147,7 @@ namespace OwnTensor {
 
         // Copy the raw 16-bit integers (uint16_t) to the tensor's memory
         // This ensures the memory layout is correct (2 bytes per element).
-        device::copy_memory(data_ptr_.get(), device_.device,
+        device::copy_memory(data(), device().device,
                            raw_data.data(), Device::CPU,
                            count * sizeof(uint16_t));
     }
@@ -158,7 +158,7 @@ namespace OwnTensor {
         if (count != numel()) {
             throw std::runtime_error("Data size does not match tensor size");
         }
-        if (!is_same_type<float16_t>(dtype_)) {
+        if (!is_same_type<float16_t>(dtype())) {
             throw std::runtime_error("Datatype mismatch");
         }
 
@@ -169,7 +169,7 @@ namespace OwnTensor {
         }
 
         // CRITICAL FIX: Use grad_ptr_ instead of data_ptr_
-        device::copy_memory(grad_ptr_.get(), device_.device,
+        device::copy_memory(grad(), device().device,
                         raw_data.data(), Device::CPU,
                         count * sizeof(uint16_t));
     }
@@ -194,7 +194,7 @@ namespace OwnTensor {
         if (count != numel()) {
             throw std::runtime_error("Data size does not match tensor size");
         }
-        if (!is_same_type<bfloat16_t>(dtype_)) {
+        if (!is_same_type<bfloat16_t>(dtype())) {
             throw std::runtime_error("Datatype mismatch");
         }
 
@@ -205,7 +205,7 @@ namespace OwnTensor {
         }
 
         // Copy the raw 16-bit integers (uint16_t) to the tensor's memory
-        device::copy_memory(data_ptr_.get(), device_.device,
+        device::copy_memory(data(), device().device,
                            raw_data.data(), Device::CPU,
                            count * sizeof(uint16_t));
     }
@@ -216,7 +216,7 @@ namespace OwnTensor {
         if (count != numel()) {
             throw std::runtime_error("Data size does not match tensor size");
         }
-        if (!is_same_type<bfloat16_t>(dtype_)) {
+        if (!is_same_type<bfloat16_t>(dtype())) {
             throw std::runtime_error("Datatype mismatch");
         }
 
@@ -225,7 +225,7 @@ namespace OwnTensor {
             raw_data[i] = source_data[i].raw_bits;
         }
 
-        device::copy_memory(grad_ptr_.get(), device_.device,
+        device::copy_memory(grad(), device().device,
                            raw_data.data(), Device::CPU,
                            count * sizeof(uint16_t));
     }
@@ -251,14 +251,14 @@ namespace OwnTensor {
             throw std::runtime_error("Data size does not match tensor size");
         }
 
-        if (!is_same_type<bool>(dtype_)) {
+        if (!is_same_type<bool>(dtype())) {
             throw std::runtime_error("Datatype mismatch: expected Bool dtype");
         }
 
         // Bool is stored as uint8_t (1 byte per bool)
-        uint8_t* dest = reinterpret_cast<uint8_t*>(data_ptr_.get());
+        uint8_t* dest = reinterpret_cast<uint8_t*>(data());
 
-        if (device_.is_cpu()) {
+        if (device().is_cpu()) {
             // Direct copy for CPU
             for (size_t i = 0; i < count; ++i) {
                 dest[i] = source_data[i] ? 1 : 0;
@@ -269,7 +269,7 @@ namespace OwnTensor {
             for (size_t i = 0; i < count; ++i) {
                 temp_data[i] = source_data[i] ? 1 : 0;
             }
-            device::copy_memory(data_ptr_.get(), device_.device,
+            device::copy_memory(data(), device().device,
             temp_data.data(), Device::CPU,
             count * sizeof(uint8_t));
         }
@@ -281,7 +281,7 @@ namespace OwnTensor {
             throw std::runtime_error("Data size does not match tensor size");
         }
 
-        if (!is_same_type<bool>(dtype_)) {
+        if (!is_same_type<bool>(dtype())) {
             throw std::runtime_error("Datatype mismatch: expected Bool dtype");
         }
 
@@ -292,11 +292,11 @@ namespace OwnTensor {
         }
 
         // Copy to tensor
-        if (device_.is_cpu()) {
-            uint8_t* dest = reinterpret_cast<uint8_t*>(data_ptr_.get());
+        if (device().is_cpu()) {
+            uint8_t* dest = reinterpret_cast<uint8_t*>(data());
             std::memcpy(dest, temp_buffer.data(), temp_buffer.size());
         } else {
-            device::copy_memory(data_ptr_.get(), device_.device,
+            device::copy_memory(data(), device().device,
             temp_buffer.data(), Device::CPU,
             temp_buffer.size() * sizeof(uint8_t));
         }
@@ -308,11 +308,11 @@ namespace OwnTensor {
             throw std::runtime_error("Data size does not match tensor size");
         }
 
-        if (!is_same_type<bool>(dtype_)) {
+        if (!is_same_type<bool>(dtype())) {
             throw std::runtime_error("Datatype mismatch: expected Bool dtype");
         }
 
-        if (!grad_ptr_) throw std::runtime_error("Gradient not allocated");
+        if (!impl_ || !impl_->has_autograd_meta()) throw std::runtime_error("Gradient not allocated");
 
         // Convert std::vector<bool> to uint8_t buffer
         std::vector<uint8_t> temp_buffer(source_data.size());
@@ -321,11 +321,11 @@ namespace OwnTensor {
         }
 
         // Copy to tensor
-        if (device_.is_cpu()) {
-            uint8_t* dest = reinterpret_cast<uint8_t*>(grad_ptr_.get());
+        if (device().is_cpu()) {
+            uint8_t* dest = reinterpret_cast<uint8_t*>(grad());
             std::memcpy(dest, temp_buffer.data(), temp_buffer.size());
         } else {
-            device::copy_memory(grad_ptr_.get(), device_.device,
+            device::copy_memory(grad(), device().device,
             temp_buffer.data(), Device::CPU,
             temp_buffer.size() * sizeof(uint8_t));
         }
@@ -335,19 +335,19 @@ namespace OwnTensor {
     // Specialization for fill with bool
     template<>
     void Tensor::fill<bool>(bool value) {
-        if (dtype_ != Dtype::Bool) {
+        if (dtype() != Dtype::Bool) {
             throw std::runtime_error("Fill bool: dtype must be Bool");
         }
 
         uint8_t fill_value = value ? 1 : 0;
 
-        if (device_.is_cpu()) {
-            uint8_t* data = reinterpret_cast<uint8_t*>(data_ptr_.get());
+        if (device().is_cpu()) {
+            uint8_t* data = reinterpret_cast<uint8_t*>(this->data());
             std::memset(data, fill_value, numel());
         } else {
             // For GPU
             std::vector<uint8_t> temp_data(numel(), fill_value);
-            device::copy_memory(data_ptr_.get(), device_.device,
+            device::copy_memory(data(), device().device,
                             temp_data.data(), Device::CPU,
                             numel() * sizeof(uint8_t));
         }
@@ -361,7 +361,7 @@ namespace OwnTensor {
             throw std::runtime_error("Data size mismatch");
         }
 
-        if (!is_same_type<float4_e2m1_t>(dtype_))
+        if (!is_same_type<float4_e2m1_t>(dtype()))
         {
             throw std::runtime_error("Data type mismatch");
         }
@@ -372,7 +372,7 @@ namespace OwnTensor {
             raw_data[i] = source_data[i].raw_bits;
         }
 
-        device::copy_memory(data_ptr_.get(), device_.device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
+        device::copy_memory(data(), device().device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
     }
 
     template <>
@@ -389,7 +389,7 @@ namespace OwnTensor {
             throw std::runtime_error("Data size mismatch");
         }
 
-        if (!is_same_type<float4_e2m1_2x_t>(dtype_))
+        if (!is_same_type<float4_e2m1_2x_t>(dtype()))
         {
             throw std::runtime_error("Data type mismatch");
         }
@@ -400,7 +400,7 @@ namespace OwnTensor {
             raw_data[i] = source_data[i].raw_bits;
         }
 
-        device::copy_memory(data_ptr_.get(), device_.device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
+        device::copy_memory(data(), device().device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
     }
 
     template <>
@@ -417,7 +417,7 @@ namespace OwnTensor {
             throw std::runtime_error("Data size mismatch");
         }
 
-        if (!is_same_type<float4_e2m1_2x_t>(dtype_))
+        if (!is_same_type<float4_e2m1_2x_t>(dtype()))
         {
             throw std::runtime_error("Data type mismatch");
         }
@@ -428,7 +428,7 @@ namespace OwnTensor {
             raw_data[i] = source_data[i].raw_bits;
         }
 
-        device::copy_memory(grad_ptr_.get(), device_.device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
+        device::copy_memory(grad(), device().device, raw_data.data(), Device::CPU, count * sizeof(uint8_t));
     }
 
     template <>

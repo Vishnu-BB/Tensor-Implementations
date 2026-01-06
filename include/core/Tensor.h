@@ -5,32 +5,14 @@
 #include "device/Device.h"
 #include "dtype/Dtype.h"
 #include "dtype/Types.h"
+#include "core/TensorImpl.h"
+#include "core/Shape.h"
+#include "core/Stride.h"
 
 namespace OwnTensor
 {
-    // ########################################################################
-    // Custom Type Definitions
-    // ########################################################################
-
-    // Shape and stride
-    struct Shape
-    {
-        std::vector<int64_t> dims;
-         // Define the equality operator for Shape objects
-        bool operator==(const Shape& other) const {
-            return dims == other.dims; // This uses the std::vector::operator==
-        }
-
-        // Optionally, define the inequality operator explicitly (less common, usually implicit)
-        bool operator!=(const Shape& other) const {
-            return !(*this == other);
-        }
-    };
-
-    struct Stride
-    {
-        std::vector<int64_t> strides;
-    };
+    // Forward declarations
+    class TensorImpl;
 
     // Tensor Utility options for smoother API
     struct TensorOptions
@@ -67,6 +49,9 @@ namespace OwnTensor
 
     class Tensor
     {
+        private:
+            intrusive_ptr<TensorImpl> impl_;
+
         public:
         //#######################################################
         // Constructor
@@ -83,21 +68,34 @@ namespace OwnTensor
         Tensor(Shape shape, bool requires_grad = false)
         : Tensor(shape, Dtype::Float32, DeviceIndex(Device::CPU), requires_grad) {}
 
+        // Default constructor
         Tensor() = default;
+
+        // Internal constructor from TensorImpl (for internal use)
+        explicit Tensor(intrusive_ptr<TensorImpl> impl) : impl_(std::move(impl)) {}
+
+        //#######################################################
+        // Internal Access (for advanced use)
+        //#######################################################
+        
+        /**
+         * Get raw TensorImpl pointer
+         * WARNING: Use with caution - this is for internal use only
+         */
+        TensorImpl* unsafeGetTensorImpl() const { return impl_.get(); }
 
         //#######################################################
         // Metadata accessors
         //#######################################################
 
-        const Shape& shape() const { return shape_; };
-        const Stride& stride() const { return stride_; };
+        const Shape& shape() const { return impl_->sizes(); };
+        const Stride& stride() const { return impl_->strides(); };
 
-
-        Dtype dtype() const { return dtype_; }
-        DeviceIndex device() const { return device_; };
-        bool requires_grad() const { return  requires_grad_; };
+        Dtype dtype() const { return impl_->dtype(); }
+        DeviceIndex device() const { return impl_->device(); };
+        bool requires_grad() const { return impl_->requires_grad(); };
         static size_t dtype_size(Dtype d);
-        int64_t ndim() const { return shape_.dims.size(); }
+        int64_t ndim() const { return impl_->ndim(); }
 
         void set_requires_grad(bool req);
         Tensor grad_view() const;
@@ -106,52 +104,34 @@ namespace OwnTensor
         // Data Accessors
         //#######################################################
 
-        void* data() { return data_ptr_.get(); }
-        const void* data() const { return data_ptr_.get(); }
+        void* data() { return impl_->mutable_data(); }
+        const void* data() const { return impl_->data(); }
 
-        void* grad() { return grad_ptr_.get(); }
-        const void* grad() const { return grad_ptr_.get(); }
+        void* grad();
+        const void* grad() const;
         
-        
-
-
-
         // ✨✨✨
         void reset() {
-            data_ptr_.reset(); // This is the key line!
-            grad_ptr_.reset();
-            shape_.dims.clear();
-            stride_.strides.clear();
-            data_size_ = 0;
-            storage_offset_ = 0;
+            impl_.reset();
         }
-
 
         template<typename T>
         T* data()
         {
-            return reinterpret_cast<T*>(data_ptr_.get() + storage_offset_);
+            return impl_->data<T>();
         }
 
         template<typename T>
-        T* grad()
-        {
-            if(!grad_ptr_) return nullptr;
-            return reinterpret_cast<T*>(grad_ptr_.get());
-        }
+        T* grad();
 
         template<typename T>
         const T* data() const
         {
-            return reinterpret_cast<const T*>(data_ptr_.get() + storage_offset_);
+            return impl_->data<T>();
         }
                 
         template<typename T>
-        const T* grad() const
-        {
-            if(!grad_ptr_) return nullptr;
-            return reinterpret_cast<const T*>(grad_ptr_.get());
-        }
+        const T* grad() const;
 
         // ######################################################
         // Static Conditional Operator - Compiler
@@ -183,10 +163,10 @@ namespace OwnTensor
         size_t nbytes() const;
         size_t grad_nbytes() const;
         size_t numel() const;
-        size_t allocated_bytes() const { return data_size_; }
-        size_t grad_allocated_bytes() const { return data_size_; }
-        bool owns_data() const { return owns_data_; }
-        bool owns_grad() const { return owns_grad_; }
+        size_t allocated_bytes() const { return impl_->storage().nbytes(); }
+        size_t grad_allocated_bytes() const;
+        bool owns_data() const;
+        bool owns_grad() const;
         bool is_contiguous() const;
         Tensor contiguous() const;
 
@@ -261,34 +241,12 @@ namespace OwnTensor
         void release();
         bool is_valid() const;
 
-
         private:
-            Shape shape_;
-            Stride stride_;
-            Dtype dtype_;
-            DeviceIndex device_;
-            bool requires_grad_;
-
-            // Data Storage using Shared Pointers for Auto Management
-            std::shared_ptr<uint8_t[]> data_ptr_;
-            std::shared_ptr<uint8_t[]> grad_ptr_;
-
-            // OWNERSHIP FLAGS
-            bool owns_data_ = true;
-            bool owns_grad_ = true;
-
-            // Size Informations
-            size_t storage_offset_ = 0;
-            size_t data_size_ = 0;
-
-
-            Tensor(std::shared_ptr<uint8_t[]> data_ptr,
-            Shape shape,
-            Stride stride,
-            size_t offset,
-            Dtype dtype,
-            DeviceIndex device,
-            bool requires_grad = false);
+            // Private constructor for creating views (shares storage)
+            Tensor(intrusive_ptr<TensorImpl> impl,
+                   Shape shape,
+                   Stride stride,
+                   size_t offset);
     };
 }
 

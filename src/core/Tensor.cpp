@@ -1,4 +1,5 @@
 #include "core/Tensor.h"
+#include "core/TensorImpl.h"
 #include "dtype/Types.h"
 #include "dtype/fp4.h"
 #include "device/AllocatorRegistry.h"
@@ -25,150 +26,50 @@
 
 namespace OwnTensor 
 {
-    Tensor::Tensor(Shape shape, Dtype dtype, DeviceIndex device, bool requires_grad)
-        : shape_(shape), dtype_(dtype), device_(device), requires_grad_(requires_grad) {
-        
+    // ========================================================================
+    // Constructors - Now create TensorImpl
+    // ========================================================================
+    
+    Tensor::Tensor(Shape shape, Dtype dtype, DeviceIndex device, bool requires_grad) {
         #ifdef WITH_DEBUG
-        
         std::cout << "Tensor constructor: device=" << (device.is_cpu() ? "CPU" : "CUDA") << "\n" << std::endl;
         #endif
 
         // == CUDA DEVICE SETTING AND CHECK == //
-        if (device.is_cuda())
-        {
+        if (device.is_cuda()) {
             #ifdef WITH_CUDA
-        if (!device::cuda_available()) {
+            if (!device::cuda_available()) {
                 throw std::runtime_error("CUDA is not available but CUDA device requested");
             }
             cudaError_t err = cudaSetDevice(device.index);
             if (err != cudaSuccess) {
                 throw std::runtime_error(std::string("Failed to set CUDA device: ") + cudaGetErrorString(err));
             }
-            // std::cout << "Set CUDA device to: " << device.index << std::endl;
-        #else   
+            #else   
             throw std::runtime_error("CUDA support not compiled");        
             #endif
         }
 
-        // Validate shape has at least one dimension
-        stride_.strides.resize(shape.dims.size());
-
-        if (shape.dims.empty())
-        {
-            // throw std::runtime_error("Shape must have atleast 1 Dimension");
-            return ;
+        // Validate shape
+        if (shape.dims.empty()) {
+            // Allow empty tensors
+            impl_ = make_intrusive<TensorImpl>(shape, dtype, device, requires_grad);
+            return;
         }
 
-        for (size_t i = 0; i < shape_.dims.size(); ++i) 
-        {
-            if (shape_.dims[i] < 0) 
-            {
+        for (size_t i = 0; i < shape.dims.size(); ++i) {
+            if (shape.dims[i] < 0) {
                 throw std::runtime_error("All dimensions must be non-negative, got dimension " + 
-                                        std::to_string(i) + " = " + std::to_string(shape_.dims[i]));
+                                        std::to_string(i) + " = " + std::to_string(shape.dims[i]));
             }
-            if (shape_.dims[i] == 0) 
-            {        
+            if (shape.dims[i] == 0) {        
                 throw std::runtime_error("Zero dimensions are not allowed, got dimension " + 
                                         std::to_string(i) + " = 0");
             }
         }
 
-        stride_ = ViewUtils::compute_strides(shape);
-        storage_offset_ = 0;  // Initialize offset to 0
-            
-        // Calculate total number of elements
-        size_t total_elems = numel();
-        size_t elem_size = dtype_size(dtype);
-        size_t raw_bytes = total_elems * elem_size;
-
-        #ifdef WITH_DEBUG
-        std::cout << "\n=== Memory calculation ===" << std::endl;
-        std::cout << "  Elements: " << total_elems << std::endl;
-        std::cout << "  Element size: " << elem_size << " bytes" << std::endl;
-        std::cout << "  Raw bytes: " << raw_bytes << std::endl;
-        std::cout << "  Raw MB: " << static_cast<double>(raw_bytes) / (1024 * 1024) << std::endl;
-        #endif
-
-        // Use raw bytes directly - no problematic alignment
-        size_t total_bytes = raw_bytes;
-        #ifdef WITH_DEBUG
-        std::cout << "  Final allocation: " << total_bytes << " bytes (" 
-                << static_cast<double>(total_bytes) / (1024 * 1024) << " MB)" << std::endl;
-        #endif
-
-        // size_t total_bytes;
-        if (device.is_cpu())
-        {
-            total_bytes = (raw_bytes + 63) & ~63;
-            #ifdef WITH_DEBUG
-            std::cout << "  CPU Aligned bytes: " << total_bytes << std::endl;
-            std::cout << "  Raw MB: " << static_cast<double>(total_bytes) / (1024 * 1024) << std::endl;
-            #endif
-        }
-        else 
-        {
-            total_bytes = ((raw_bytes + 256 - 1) / 256) * 256;
-            #ifdef WITH_DEBUG
-            std::cout << "GPU Aligned bytes: " << total_bytes << std::endl;
-            std::cout << "Raw MB: " << static_cast<double>(total_bytes) / (1024 * 1024) << std::endl;
-            #endif
-
-        }
-        
-        /*##############################################################
-                MEMORY ALLOCATION FOR DATA AND GRADIENTS
-        ################################################################*/
-
-        // Handle CPU device allocation
-        // Handle CUDA device allocation with device index
-        Allocator* alloc = AllocatorRegistry::get_allocator(device.device);
-
-        void* raw_data_ptr = alloc->allocate(total_bytes);
-
-        #ifdef WITH_CUDA//✨✨✨
-        if (device.is_cuda()) {
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            alloc->memsetAsync(raw_data_ptr, 0, total_bytes, stream);
-        } else 
-        #endif
-        {
-            alloc->memset(raw_data_ptr, 0, total_bytes);
-        }//✨✨✨
-        
-        data_ptr_ = std::shared_ptr<uint8_t[]>(
-            static_cast<uint8_t*>(raw_data_ptr),
-            [alloc](uint8_t* ptr) { 
-                alloc->deallocate(ptr); 
-            }
-        );
-
-        if (requires_grad_) {
-            void* raw_grad_ptr = alloc->allocate(total_bytes);
-
-            #ifdef WITH_CUDA//✨✨✨
-            if (device.is_cuda()) {
-                cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-                alloc->memsetAsync(raw_grad_ptr, 0, total_bytes, stream);
-            } else
-            #endif
-            {
-                alloc->memset(raw_grad_ptr, 0, total_bytes);
-            }//✨✨✨
-
-            grad_ptr_ = std::shared_ptr<uint8_t[]>(
-                static_cast<uint8_t*>(raw_grad_ptr),
-                [alloc](uint8_t* ptr) { 
-                    alloc->deallocate(ptr); 
-                }
-            );
-        }
-        
-        // Set ownership flag
-        owns_data_ = true;
-        owns_grad_ = requires_grad_;
-        data_size_ = total_bytes;
-
-        // std::cout << "=== TENSOR CONSTRUCTOR END ===" << std::endl;    
+        // Create TensorImpl - it handles everything
+        impl_ = make_intrusive<TensorImpl>(shape, dtype, device, requires_grad);
     }
 
     // Tensor Options constructor
@@ -176,27 +77,29 @@ namespace OwnTensor
         : Tensor(shape, opts.dtype, opts.device, opts.requires_grad) {
     }
 
-    // Private constructor for creating views (shares data pointer)
-    Tensor::Tensor(std::shared_ptr<uint8_t[]> data_ptr,
-                Shape shape,
-                Stride stride,
-                size_t offset,
-                Dtype dtype,
-                DeviceIndex device,
-                bool requires_grad) :
-                shape_(shape),
-                stride_(stride),
-                dtype_(dtype),
-                device_(device),
-                requires_grad_(requires_grad),
-                data_ptr_(data_ptr),
-                grad_ptr_(nullptr),
-                owns_data_(false),
-                owns_grad_(true),
-                storage_offset_(offset),
-                data_size_(0)
-    {
-        // No memory allocation - sharing existing memory
+    // Private constructor for creating views (shares TensorImpl's storage)
+    Tensor::Tensor(intrusive_ptr<TensorImpl> impl,
+                   Shape shape,
+                   Stride stride,
+                   size_t offset) {
+        // Create new Storage that shares the data from the original
+        Storage shared_storage = Storage(
+            DataPtr(impl->mutable_storage().data_ptr(), DataPtrDeleter(impl->storage().allocator())),
+            impl->storage().nbytes(),
+            impl->storage().dtype(),
+            impl->storage().device(),
+            impl->storage().allocator()
+        );
+        
+        // Create new TensorImpl with shared storage but different metadata
+        impl_ = make_intrusive<TensorImpl>(
+            std::move(shared_storage),
+            shape,
+            stride,
+            offset,
+            impl->dtype(),
+            impl->device()
+        );
     }
 
     // Main implementation
@@ -262,40 +165,68 @@ namespace OwnTensor
     //     // containing the indices where condition is true
     //     return condition.nonzero(true);  // Assuming you have nonzero implemented
     // }
-
-    // Utility
-    size_t Tensor:: numel() const 
-    {
-        size_t total = 1;
-        for (auto dim : shape_.dims) 
-        {
-        total *= dim;
-        // std::cout << " numel: dim=" << dim << ", running_total=" << total << std::endl;
-        }
-        return total;
+    
+    // ========================================================================
+    // Utility Methods - Delegate to TensorImpl
+    // ========================================================================
+    
+    size_t Tensor::numel() const {
+        if (!impl_) return 0;
+        return impl_->numel();
     }
 
-    size_t Tensor::nbytes() const 
-    {
-        return numel() * dtype_size(dtype_); // data_size_
+    size_t Tensor::nbytes() const {
+        if (!impl_) return 0;
+        return impl_->nbytes();
     }
 
     size_t Tensor::grad_nbytes() const {
-        if (requires_grad_){
-            return data_size_;
+        if (!impl_ || !impl_->requires_grad()) return 0;
+        return impl_->nbytes();
+    }
+
+    // ========================================================================
+    // Gradient Access Methods
+    // ========================================================================
+    
+    void* Tensor::grad() {
+        if (!impl_ || !impl_->has_autograd_meta()) {
+            return nullptr;
         }
-        else {
-            return 0;
+        return impl_->mutable_grad().data();
+    }
+
+    const void* Tensor::grad() const {
+        if (!impl_ || !impl_->has_autograd_meta()) {
+            return nullptr;
         }
+        return impl_->grad().data();
+    }
+
+    template<typename T>
+    T* Tensor::grad() {
+        if (!impl_ || !impl_->has_autograd_meta()) {
+            return nullptr;
+        }
+        return impl_->mutable_grad().data<T>();
+    }
+
+    template<typename T>
+    const T* Tensor::grad() const {
+        if (!impl_ || !impl_->has_autograd_meta()) {
+            return nullptr;
+        }
+        return impl_->grad().data<T>();
     }
 
     bool Tensor::is_contiguous() const
     {
-        // Need to look into it
-        // What it is and what's it for
+        if (!impl_) return true;
+        
+        // Check if strides match row-major layout
         int64_t expected_stride = 1;
-        const auto& dims = shape_.dims;
-        const auto& strides = stride_.strides;
+        const auto& dims = impl_->sizes().dims;
+        const auto& strides = impl_->strides().strides;
        
         for (int i = dims.size() - 1; i >= 0; --i)
         {
@@ -308,31 +239,39 @@ namespace OwnTensor
         return true;
     }
 
+    
+    // ========================================================================
+    // Contiguous Method
+    // ========================================================================
+    
     Tensor Tensor::contiguous() const {
-        // If already contiguous with zero offset, return a bytewise copy that owns data.
-        // Returning a copy (not aliasing) keeps semantics clear and avoids alias bugs.
-        if (is_contiguous() && storage_offset_ == 0) {
-            Tensor out(shape_, dtype_, device_, requires_grad_);
-            Allocator* alloc = AllocatorRegistry::get_allocator(device_.device);
-            // alloc->memcpy(out.data(), data(), nbytes());
-            alloc->memcpy(out.data(), data(), nbytes(), is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);//✨✨✨
+        if (!impl_) {
+            throw std::runtime_error("contiguous: tensor is not initialized");
+        }
+        
+        // If already contiguous with zero offset, return a copy
+        if (is_contiguous() && storage_offset() == 0) {
+            Tensor out(impl_->sizes(), dtype(), device(), requires_grad());
+            Allocator* alloc = AllocatorRegistry::get_allocator(impl_->device().device);
+            alloc->memcpy(out.data(), data(), nbytes(), 
+                         is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);
             return out;
         }
 
-        // Allocate destination with row‑major layout on the same device
-        Tensor out(shape_, dtype_, device_, requires_grad_);
-        Allocator* alloc = AllocatorRegistry::get_allocator(device_.device);
+        // Allocate destination with row-major layout on the same device
+        Tensor out(impl_->sizes(), dtype(), device(), requires_grad());
+        Allocator* alloc = AllocatorRegistry::get_allocator(impl_->device().device);
 
-        const size_t bytes_per_elem = dtype_size(dtype_);
+        const size_t bytes_per_elem = dtype_size(dtype());
         const int64_t total_elems = static_cast<int64_t>(numel());
-        const size_t D = shape_.dims.size();
+        const size_t D = impl_->sizes().dims.size();
 
         if (is_cpu()) {
             std::vector<int64_t> idx(D, 0);
 
             auto bump = [&](std::vector<int64_t>& v)->bool {
                 for (int d = int(D) - 1; d >= 0; --d) {
-                    if (++v[d] < shape_.dims[d]) return true;
+                    if (++v[d] < impl_->sizes().dims[d]) return true;
                     v[d] = 0;
                 }
                 return false;
@@ -342,20 +281,18 @@ namespace OwnTensor
             size_t write_pos = 0;
 
             do {
-                // Compute element offset in elements: sum(idx[d] * stride[d])
-                // DON'T add storage_offset here!
+                // Compute element offset in elements
                 int64_t elem_off = 0;
                 for (size_t d = 0; d < D; ++d) {
-                    elem_off += idx[d] * stride_.strides[d];
+                    elem_off += idx[d] * impl_->strides().strides[d];
                 }
 
-                // data() already accounts for storage_offset, so just add elem_off
+                // data() already accounts for storage_offset
                 const uint8_t* src_elem_ptr =
                     reinterpret_cast<const uint8_t*>(data())
                     + elem_off * bytes_per_elem;
 
-                // alloc->memcpy(dst + write_pos, src_elem_ptr, bytes_per_elem);
-                alloc->memcpy(dst + write_pos, src_elem_ptr, bytes_per_elem, cudaMemcpyHostToHost);//✨✨✨
+                alloc->memcpy(dst + write_pos, src_elem_ptr, bytes_per_elem, cudaMemcpyHostToHost);
                 write_pos += bytes_per_elem;
 
             } while (bump(idx));
@@ -366,20 +303,20 @@ namespace OwnTensor
             else if (is_cuda()) {
                 cudaStream_t stream = 0;
                 
-                // *** CRITICAL FIX: Copy dims and strides to GPU memory first! ***
+                // Copy dims and strides to GPU memory
                 int64_t* d_dims = nullptr;
                 int64_t* d_strides = nullptr;
                 
                 cudaMallocAsync(&d_dims, D * sizeof(int64_t), stream);
                 cudaMallocAsync(&d_strides, D * sizeof(int64_t), stream);
                 
-                cudaMemcpy(d_dims, shape_.dims.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
-                cudaMemcpy(d_strides, stride_.strides.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
+                cudaMemcpy(d_dims, impl_->sizes().dims.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
+                cudaMemcpy(d_strides, impl_->strides().strides.data(), D * sizeof(int64_t), cudaMemcpyHostToDevice);
                 
                 contiguous_strided_copy_cuda(
                     data(), out.data(), total_elems,
-                    d_dims,      // ← GPU pointer
-                    d_strides,   // ← GPU pointer  
+                    d_dims,
+                    d_strides,
                     static_cast<int32_t>(D),
                     0,
                     static_cast<int32_t>(bytes_per_elem),
@@ -394,8 +331,6 @@ namespace OwnTensor
                                             + cudaGetErrorString(err));
                 }
                 
-                // Synchronize and clean up
-                // cudaDeviceSynchronize();//✨✨✨
                 cudaFreeAsync(d_dims, stream);
                 cudaFreeAsync(d_strides, stream);
                 
@@ -407,22 +342,30 @@ namespace OwnTensor
             }
         }
 
-    Tensor Tensor::clone() const
-    {
+    
+    // ========================================================================
+    // Clone and Copy Methods
+    // ========================================================================
+    
+    Tensor Tensor::clone() const {
+        if (!impl_) {
+            throw std::runtime_error("clone: tensor is not initialized");
+        }
+        
         // Edge case: Empty tensor
         if (numel() == 0) {
-            return Tensor(shape_, dtype_, device_, requires_grad_);
+            return Tensor(impl_->sizes(), impl_->dtype(), impl_->device(), requires_grad());
         }
         
         // Edge case: Non-contiguous or has storage_offset - materialize first
-        if (!is_contiguous() || storage_offset_ != 0) {
+        if (!is_contiguous() || storage_offset() != 0) {
             try {
-                Tensor src_contig = contiguous();  // Uses your contiguous_kernel.cu for GPU
-                Tensor result(src_contig.shape_, dtype_, device_, requires_grad_);
+                Tensor src_contig = contiguous();
+                Tensor result(src_contig.shape(), dtype(), device(), requires_grad());
                 
-                Allocator* alloc = AllocatorRegistry::get_allocator(device_.device);
-                // alloc->memcpy(result.data(), src_contig.data(), src_contig.nbytes());
-                alloc->memcpy(result.data(), src_contig.data(), src_contig.nbytes(), is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);//✨✨✨
+                Allocator* alloc = AllocatorRegistry::get_allocator(impl_->device().device);
+                alloc->memcpy(result.data(), src_contig.data(), src_contig.nbytes(), 
+                             is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);
 
                 return result;
             } catch (const std::exception& e) {
@@ -432,11 +375,11 @@ namespace OwnTensor
         
         // Contiguous path: direct clone
         try {
-            Tensor result(shape_, dtype_, device_, requires_grad_);
+            Tensor result(impl_->sizes(), dtype(), device(), requires_grad());
             
-            Allocator* alloc = AllocatorRegistry::get_allocator(device_.device);
-            // alloc->memcpy(result.data(), data(), nbytes());
-            alloc->memcpy(result.data(), data(), nbytes(), is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);//✨✨✨
+            Allocator* alloc = AllocatorRegistry::get_allocator(impl_->device().device);
+            alloc->memcpy(result.data(), data(), nbytes(), 
+                         is_cpu() ? cudaMemcpyHostToHost : cudaMemcpyDeviceToDevice);
             
             return result;
         } catch (const std::exception& e) {
@@ -444,58 +387,82 @@ namespace OwnTensor
         }
     }
 
-    Tensor& Tensor::copy_(const Tensor& src)
-        {
-            // Edge case: Self-copy is no-op
-            if (this == &src || data() == src.data()) return *this;
-            // Edge case: Empty tensor
-            if (numel() == 0 && src.numel() == 0) {
-                return *this;
-            }
-            // Edge case: Size validation
-            if (numel() != src.numel()) {
-                throw std::runtime_error(
-                    "copy_: size mismatch. Destination has " + 
-                    std::to_string(numel()) + " elements but source has " + 
-                    std::to_string(src.numel())
-                );
-            }
-            if (dtype_ != src.dtype_) {
-                throw std::runtime_error("copy_: dtype mismatch");
-            }
-            if (numel() == 0) return *this;
-            if (!is_contiguous() || storage_offset_ != 0) {
-                throw std::runtime_error("copy_: destination must be contiguous");
-            }
-            
-            // Materialize non-contiguous source
-            const Tensor* src_ptr = &src;
-            Tensor src_contig;
-            if (!src.is_contiguous() ) {
-                src_contig = src.contiguous();
-                src_ptr = &src_contig;
-            }
-            try {
-                device::copy_memory(
-                    // data(), device_.device,           // destination ptr and device
-                    // src_ptr->data(), src_ptr->device_.device,  // source ptr and device
-                    // nbytes()
-                    this->data(), 
-                    this->device_.device,           // destination ptr and device
-                    src_ptr->data(), 
-                    src_ptr->device_.device,  // source ptr and device
-                    src_ptr->nbytes()
-                );
-            } catch (const std::exception& e) {
-                throw std::runtime_error(std::string("copy_ failed: ") + e.what());
-            }
-            
+    Tensor& Tensor::copy_(const Tensor& src) {
+        if (!impl_ || !src.impl_) {
+            throw std::runtime_error("copy_: tensor is not initialized");
+        }
+        
+        // Edge case: Self-copy is no-op
+        if (this == &src || data() == src.data()) return *this;
+        
+        // Edge case: Empty tensor
+        if (numel() == 0 && src.numel() == 0) {
             return *this;
         }
+        
+        // Edge case: Size validation
+        if (numel() != src.numel()) {
+            throw std::runtime_error(
+                "copy_: size mismatch. Destination has " + 
+                std::to_string(numel()) + " elements but source has " + 
+                std::to_string(src.numel())
+            );
+        }
+        
+        if (dtype() != src.dtype()) {
+            throw std::runtime_error("copy_: dtype mismatch");
+        }
+        
+        if (numel() == 0) return *this;
+        
+        if (!is_contiguous() || storage_offset() != 0) {
+            throw std::runtime_error("copy_: destination must be contiguous");
+        }
+        
+        // Materialize non-contiguous source
+        const Tensor* src_ptr = &src;
+        Tensor src_contig;
+        if (!src.is_contiguous()) {
+            src_contig = src.contiguous();
+            src_ptr = &src_contig;
+        }
+        
+        try {
+            device::copy_memory(
+                this->data(), this->device().device,
+                src_ptr->data(), src_ptr->device().device,
+                src_ptr->nbytes()
+            );
+        } catch (const std::exception& e) {
+            throw std::runtime_error(std::string("copy_ failed: ") + e.what());
+        }
+        
+        return *this;
+    }
 
-    size_t Tensor::storage_offset() const 
-    {
-        return storage_offset_;
+    // ========================================================================
+    // Storage and Memory Info Methods
+    // ========================================================================
+    
+    size_t Tensor::storage_offset() const {
+        if (!impl_) return 0;
+        return impl_->storage_offset();
+    }
+    
+    bool Tensor::owns_data() const {
+        // In new architecture, storage ownership is managed by Storage/TensorImpl
+        // Views share storage but don't have unique ownership
+        if (!impl_) return false;
+        return impl_->use_count() == 1;
+    }
+    
+    bool Tensor::owns_grad() const {
+        if (!impl_ || !impl_->has_autograd_meta()) return false;
+        return true;  // Gradient always owned by autograd_meta
+    }
+    
+    bool Tensor::is_valid() const {
+        return impl_ && impl_->storage().is_valid();
     }
 
     // Determine element size based on data type
@@ -523,28 +490,36 @@ namespace OwnTensor
         }
     }
 
+    
+    // ========================================================================
+    // Device Transfer Methods
+    // ========================================================================
+    
     Tensor Tensor::to(DeviceIndex device) const {
-        // Same device - just return this tensor (no copy needed)
-        if (device.device == device_.device && device.index == device_.index)
-        {
+        if (!impl_) {
+            throw std::runtime_error("to: tensor is not initialized");
+        }
+        
+        // Same device - just return a copy
+        if (device.device == impl_->device().device && device.index == impl_->device().index) {
             return *this;
         }
         
         // Handle views: Must be contiguous before device transfer
-        if (!owns_data_ || !is_contiguous())
-        {
-            throw std::runtime_error(
-                "Non-contiguous tensors cannot be transferred. Implement contiguous() first."
-            );
+        if (!is_contiguous()) {
+            Tensor contig = contiguous();
+            return contig.to(device);
         }
         
-        // Create tensor on target device
-        Tensor result(shape_, dtype_, device, requires_grad_);
+        // Create new tensor on target device
+        Tensor result(impl_->sizes(), impl_->dtype(), device, requires_grad());
         
         // Copy data between devices
-        device::copy_memory(result.data(), device.device, 
-                        data(), device_.device, 
-                        numel() * dtype_size(dtype_));
+        device::copy_memory(
+            result.data(), device.device,
+            data(), impl_->device().device,
+            nbytes()
+        );
         
         return result;
     }
@@ -558,11 +533,13 @@ namespace OwnTensor
     }
 
     bool Tensor::is_cpu() const {
-        return device_.is_cpu();
+        if (!impl_) return true;  // Default to CPU
+        return impl_->device().is_cpu();
     }
 
     bool Tensor::is_cuda() const {
-        return device_.is_cuda();
+        if (!impl_) return false;
+        return impl_->device().is_cuda();
     }
 
 Tensor Tensor::to_bool() const {
@@ -608,43 +585,70 @@ Tensor Tensor::to_bool() const {
 }
 
 void Tensor::set_requires_grad(bool req) {
-    if (requires_grad_ == req) return; // No change
-
-    requires_grad_ = req;
-
-    if (requires_grad_ && !grad_ptr_) {
-        // Allocate gradient buffer if it doesn't exist
-        size_t total_bytes = numel() * dtype_size(dtype_);
-        
-        // Match the allocation logic used in the constructor
-        Allocator* alloc = AllocatorRegistry::get_allocator(device_.device);
-        void* raw_grad_ptr = alloc->allocate(total_bytes);
-        alloc->memset(raw_grad_ptr, 0, total_bytes);
-
-        grad_ptr_ = std::shared_ptr<uint8_t[]>(
-            static_cast<uint8_t*>(raw_grad_ptr),
-            [alloc](uint8_t* ptr) { alloc->deallocate(ptr); }
-        );
-    } else if (!requires_grad_) {
-        grad_ptr_.reset();
+    if (!impl_) {
+        throw std::runtime_error("set_requires_grad: tensor is not initialized");
     }
+    impl_->set_requires_grad(req);
 }
 
 Tensor Tensor::grad_view() const {
-    if (!grad_ptr_) {
+    if (!impl_ || !impl_->has_autograd_meta()) {
         throw std::runtime_error("grad_view(): Tensor has no gradient allocated.");
     }
-    // 1. Copy the metadata (shape, strides, device, etc.)
-    Tensor view = *this; 
-    // 2. CRITICAL: Set the view's data buffer to the original's gradient buffer
-    view.data_ptr_ = this->grad_ptr_;
-    // 3. The view itself doesn't need its own gradients
-    view.set_requires_grad(false);
-    view.grad_ptr_ = nullptr;
-    return view;
+    
+    // Return the gradient tensor directly
+    return impl_->grad();
 }
 
-    // bool 
+// ========================================================================
+// Release Method
+// ========================================================================
+
+void Tensor::release() {
+    impl_.reset();
+}
+
+//  ========================================================================
+// Explicit Template Instantiations
+// ========================================================================
+
+// Explicit instantiations for grad() templates
+template bool* Tensor::grad<bool>();
+template const bool* Tensor::grad<bool>() const;
+
+template int8_t* Tensor::grad<int8_t>();
+template const int8_t* Tensor::grad<int8_t>() const;
+
+template int16_t* Tensor::grad<int16_t>();
+template const int16_t* Tensor::grad<int16_t>() const;
+
+template int32_t* Tensor::grad<int32_t>();
+template const int32_t* Tensor::grad<int32_t>() const;
+
+template int64_t* Tensor::grad<int64_t>();
+template const int64_t* Tensor::grad<int64_t>() const;
+
+template float* Tensor::grad<float>();
+template const float* Tensor::grad<float>() const;
+
+template double* Tensor::grad<double>();
+template const double* Tensor::grad<double>() const;
+
+template float16_t* Tensor::grad<float16_t>();
+template const float16_t* Tensor::grad<float16_t>() const;
+
+template bfloat16_t* Tensor::grad<bfloat16_t>();
+template const bfloat16_t* Tensor::grad<bfloat16_t>() const;
+
+template complex32_t* Tensor::grad<complex32_t>();
+template const complex32_t* Tensor::grad<complex32_t>() const;
+
+template complex64_t* Tensor::grad<complex64_t>();
+template const complex64_t* Tensor::grad<complex64_t>() const;
+
+template complex128_t* Tensor::grad<complex128_t>();
+template const complex128_t* Tensor::grad<complex128_t>() const;
+ 
     template const bool* Tensor::data<bool>() const;
     template bool* Tensor::data<bool>();
 // int8_t (short)
@@ -782,4 +786,4 @@ Tensor Tensor::grad_view() const {
     template void Tensor::fill<float4_e2m1_t>(float4_e2m1_t);
     template void Tensor::fill<float4_e2m1_2x_t>(float4_e2m1_2x_t);
 
-}
+} // namespace OwnTensor
