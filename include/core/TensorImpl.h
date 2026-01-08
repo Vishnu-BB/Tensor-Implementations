@@ -161,9 +161,9 @@ public:
  */
 class TensorImpl : public intrusive_ptr_target {
 private:
-    Storage storage_;                           // Underlying data storage
-    std::unique_ptr<AutogradMeta> autograd_meta_; // Autograd metadata (lazy)
-    VariableVersion version_counter_;            // Version for in-place ops
+    Storage storage_;                                      // Underlying data storage
+    std::unique_ptr<AutogradMetaInterface> autograd_meta_; // Autograd metadata (lazy)
+    VariableVersion version_counter_;                      // Version for in-place ops
     
     // Tensor metadata
     Shape shape_;                                // Tensor dimensions
@@ -309,12 +309,12 @@ public:
     /**
      * Set autograd metadata
      */
-    void set_autograd_meta(std::unique_ptr<AutogradMeta> autograd_meta);
+    void set_autograd_meta(std::unique_ptr<AutogradMetaInterface> autograd_meta);
     
     /**
      * Get autograd metadata (may be nullptr)
      */
-    AutogradMeta* autograd_meta() const {
+    AutogradMetaInterface* autograd_meta() const {
         return autograd_meta_.get();
     }
     

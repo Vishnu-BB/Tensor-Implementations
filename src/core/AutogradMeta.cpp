@@ -1,22 +1,27 @@
 #include "core/AutogradMeta.h"
 #include "core/Tensor.h"
 #include "core/TensorImpl.h"
+#include "autograd/Hooks.h"
 #include <stdexcept>
 
 namespace OwnTensor {
 
 // ============================================================================
-// Constructors
+// Move Semantics
 // ============================================================================
-
-AutogradMeta::AutogradMeta(bool requires_grad)
-    : requires_grad_(requires_grad) {
-    // grad_ is nullptr - lazy allocation
-}
 
 AutogradMeta::AutogradMeta(AutogradMeta&& other) noexcept
     : grad_(std::move(other.grad_)),
-      requires_grad_(other.requires_grad_) {
+      grad_fn_(std::move(other.grad_fn_)),
+      grad_accumulator_(std::move(other.grad_accumulator_)),
+      hooks_(std::move(other.hooks_)),
+      post_acc_grad_hook_(std::move(other.post_acc_grad_hook_)),
+      requires_grad_(other.requires_grad_),
+      retains_grad_(other.retains_grad_),
+      is_view_(other.is_view_),
+      output_nr_(other.output_nr_),
+      grad_dtype_(other.grad_dtype_),
+      allow_grad_dtype_mismatch_(other.allow_grad_dtype_mismatch_) {
     // mutex is not movable, but that's fine - each AutogradMeta has its own
 }
 
@@ -26,14 +31,28 @@ AutogradMeta& AutogradMeta::operator=(AutogradMeta&& other) noexcept {
         std::lock_guard<std::mutex> lock2(other.mutex_);
         
         grad_ = std::move(other.grad_);
+        grad_fn_ = std::move(other.grad_fn_);
+        grad_accumulator_ = std::move(other.grad_accumulator_);
+        hooks_ = std::move(other.hooks_);
+        post_acc_grad_hook_ = std::move(other.post_acc_grad_hook_);
         requires_grad_ = other.requires_grad_;
+        retains_grad_ = other.retains_grad_;
+        is_view_ = other.is_view_;
+        output_nr_ = other.output_nr_;
+        grad_dtype_ = other.grad_dtype_;
+        allow_grad_dtype_mismatch_ = other.allow_grad_dtype_mismatch_;
     }
     return *this;
 }
 
 // ============================================================================
-// Gradient Access
+// Interface Implementation
 // ============================================================================
+
+void AutogradMeta::set_requires_grad(bool requires_grad, TensorImpl* self_impl) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    requires_grad_ = requires_grad;
+}
 
 Tensor& AutogradMeta::mutable_grad(TensorImpl* self_impl) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -65,6 +84,10 @@ const Tensor& AutogradMeta::grad() const {
     return *grad_;
 }
 
+// ============================================================================
+// Additional Methods
+// ============================================================================
+
 void AutogradMeta::set_grad(const Tensor& new_grad) {
     std::lock_guard<std::mutex> lock(mutex_);
     grad_ = std::make_unique<Tensor>(new_grad);
@@ -80,13 +103,20 @@ void AutogradMeta::reset_grad() {
     grad_.reset();
 }
 
-// ============================================================================
-// Requires Grad
-// ============================================================================
-
-void AutogradMeta::set_requires_grad(bool requires_grad) {
+void AutogradMeta::add_hook(std::unique_ptr<FunctionPreHook> hook) {
     std::lock_guard<std::mutex> lock(mutex_);
-    requires_grad_ = requires_grad;
+    hooks_.push_back(std::move(hook));
+}
+
+void AutogradMeta::set_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    post_acc_grad_hook_ = std::move(hook);
+}
+
+void AutogradMeta::clear_hooks() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hooks_.clear();
+    post_acc_grad_hook_.reset();
 }
 
 } // namespace OwnTensor

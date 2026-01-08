@@ -120,7 +120,7 @@ void TensorImpl::set_requires_grad(bool requires_grad) {
         // Lazy allocation of autograd metadata
         autograd_meta_ = std::make_unique<AutogradMeta>(true);
     } else if (autograd_meta_) {
-        autograd_meta_->set_requires_grad(requires_grad);
+        autograd_meta_->set_requires_grad(requires_grad, this);
     }
 }
 
@@ -142,7 +142,7 @@ const Tensor& TensorImpl::grad() const {
     return autograd_meta_->grad();
 }
 
-void TensorImpl::set_autograd_meta(std::unique_ptr<AutogradMeta> autograd_meta) {
+void TensorImpl::set_autograd_meta(std::unique_ptr<AutogradMetaInterface> autograd_meta) {
     autograd_meta_ = std::move(autograd_meta);
 }
 

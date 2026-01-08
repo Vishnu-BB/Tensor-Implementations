@@ -13,6 +13,9 @@ namespace OwnTensor
 {
     // Forward declarations
     class TensorImpl;
+    class Node;
+    class FunctionPreHook;
+    class PostAccumulateGradHook;
 
     // Tensor Utility options for smoother API
     struct TensorOptions
@@ -217,6 +220,38 @@ namespace OwnTensor
         Tensor t() const;
         Tensor flatten(int start_dim = 0, int end_dim = -1) const;
         Tensor unflatten(int dim, Shape sizes) const;
+
+
+        //#######################################################
+        // Autograd Methods (PyTorch-style)
+        //#######################################################
+        
+        // Gradient function
+        std::shared_ptr<Node> grad_fn() const;
+        void set_grad_fn(std::shared_ptr<Node> fn);
+        
+        // Output number (for multi-output operations)
+        uint32_t output_nr() const;
+        void set_output_nr(uint32_t nr);
+        
+        // View tracking
+        bool is_view() const;
+        void set_is_view(bool is_view);
+        
+        // Gradient retention (for non-leaves)
+        bool retains_grad() const;
+        void set_retains_grad(bool retains);
+        
+        // Check if this is a leaf tensor
+        bool is_leaf() const;
+        
+        // Hooks
+        void register_hook(std::unique_ptr<FunctionPreHook> hook);
+        void register_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook);
+        void clear_hooks();
+        
+        // Backward pass
+        void backward(const Tensor* grad_output = nullptr);
 
         //#######################################################
         // View Utilities

@@ -1,5 +1,9 @@
 #include "core/Tensor.h"
 #include "core/TensorImpl.h"
+#include "core/AutogradMeta.h"
+#include "autograd/Node.h"
+#include "autograd/Hooks.h"
+#include "autograd/Engine.h"
 #include "dtype/Types.h"
 #include "dtype/fp4.h"
 #include "device/AllocatorRegistry.h"
@@ -598,6 +602,128 @@ Tensor Tensor::grad_view() const {
     
     // Return the gradient tensor directly
     return impl_->grad();
+}
+
+// ========================================================================
+// Autograd Methods (PyTorch-style)
+// ========================================================================
+
+std::shared_ptr<Node> Tensor::grad_fn() const {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return nullptr;
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    return meta->grad_fn();
+}
+
+void Tensor::set_grad_fn(std::shared_ptr<Node> fn) {
+    if (!impl_) {
+        throw std::runtime_error("set_grad_fn: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_grad_fn(std::move(fn));
+}
+
+uint32_t Tensor::output_nr() const {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return 0;
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    return meta->output_nr();
+}
+
+void Tensor::set_output_nr(uint32_t nr) {
+    if (!impl_) {
+        throw std::runtime_error("set_output_nr: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_output_nr(nr);
+}
+
+bool Tensor::is_view() const {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return false;
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    return meta->is_view();
+}
+
+void Tensor::set_is_view(bool is_view) {
+    if (!impl_) {
+        throw std::runtime_error("set_is_view: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_is_view(is_view);
+}
+
+bool Tensor::retains_grad() const {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return false;
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    return meta->retains_grad();
+}
+
+void Tensor::set_retains_grad(bool retains) {
+    if (!impl_) {
+        throw std::runtime_error("set_retains_grad: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_retains_grad(retains);
+}
+
+bool Tensor::is_leaf() const {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return true;  // Tensors without autograd meta are leaves
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    return meta->is_leaf();
+}
+
+void Tensor::register_hook(std::unique_ptr<FunctionPreHook> hook) {
+    if (!impl_) {
+        throw std::runtime_error("register_hook: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->add_hook(std::move(hook));
+}
+
+void Tensor::register_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook) {
+    if (!impl_) {
+        throw std::runtime_error("register_post_acc_hook: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_post_acc_hook(std::move(hook));
+}
+
+void Tensor::clear_hooks() {
+    if (!impl_ || !impl_->has_autograd_meta()) {
+        return;  // Nothing to clear
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->clear_hooks();
+}
+
+void Tensor::backward(const Tensor* grad_output) {
+    autograd::backward(*this, grad_output);
 }
 
 // ========================================================================
