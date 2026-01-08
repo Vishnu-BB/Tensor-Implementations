@@ -120,34 +120,54 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         return;
     }
     
-    // Execute backward pass
-    for (auto& node : nodes) {
-        // Get accumulated gradients for this node
-        auto it = grad_map.find(node.get());
-        if (it == grad_map.end()) {
-            continue;  // No gradient for this node
+    // Execute backward pass - process nodes and any new nodes added during execution
+    std::unordered_set<Node*> processed;
+    
+    // Keep accumulators alive during backward pass
+    std::vector<std::shared_ptr<Node>> accumulators;
+    
+    // Keep processing until no new nodes are added
+    bool made_progress = true;
+    while (made_progress) {
+        made_progress = false;
+        
+        // Get all nodes that have gradients but haven't been processed
+        std::vector<Node*> to_process;
+        for (auto& pair : grad_map) {
+            if (processed.find(pair.first) == processed.end()) {
+                to_process.push_back(pair.first);
+            }
         }
         
-        auto& node_grads = it->second;
-        
-        // Sum all gradients for this node (multi-output case)
-        Tensor grad_output = node_grads[0];
-        for (size_t i = 1; i < node_grads.size(); ++i) {
-            grad_output = operator+(grad_output, node_grads[i]);
-        }
-        
-        // Apply backward function
-        std::vector<Tensor> input_grads = node->apply({grad_output});
-        
-        // Distribute gradients to next edges
-        const auto& edges = node->next_edges();
-        for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
-            if (!edges[i].is_valid()) {
-                continue;
+        for (Node* node_ptr : to_process) {
+            processed.insert(node_ptr);
+            made_progress = true;
+            
+            // Get accumulated gradients for this node
+            auto& node_grads = grad_map[node_ptr];
+            
+            // Sum all gradients for this node (multi-output case)
+            Tensor grad = node_grads[0];
+            for (size_t i = 1; i < node_grads.size(); ++i) {
+                grad = operator+(grad, node_grads[i]);
             }
             
-            auto next_fn = edges[i].function;
-            grad_map[next_fn.get()].push_back(input_grads[i]);
+            // Apply backward function
+            std::vector<Tensor> input_grads = node_ptr->apply({grad});
+            
+            // Distribute gradients to next edges
+            const auto& edges = node_ptr->next_edges();
+            for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
+                if (!edges[i].is_valid()) {
+                    continue;
+                }
+                
+                auto next_fn = edges[i].function;
+                grad_map[next_fn.get()].push_back(input_grads[i]);
+                
+                // Keep accumulators alive
+                accumulators.push_back(next_fn);
+            }
         }
     }
 }

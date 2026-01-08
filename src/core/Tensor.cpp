@@ -87,12 +87,15 @@ namespace OwnTensor
                    Stride stride,
                    size_t offset) {
         // Create new Storage that shares the data from the original
+        // CRITICAL FIX: Use DataPtrDeleter() with nullptr allocator to prevent double-free.
+        // The view does NOT own the memory; the original TensorImpl does.
+        // Warning: Original tensor must outlive this view!
         Storage shared_storage = Storage(
-            DataPtr(impl->mutable_storage().data_ptr(), DataPtrDeleter(impl->storage().allocator())),
+            DataPtr(impl->mutable_storage().data_ptr(), DataPtrDeleter(nullptr)), // No-op deleter
             impl->storage().nbytes(),
             impl->storage().dtype(),
             impl->storage().device(),
-            impl->storage().allocator()
+            impl->storage().allocator() // Keep track of allocator for info, but don't use for deletion
         );
         
         // Create new TensorImpl with shared storage but different metadata

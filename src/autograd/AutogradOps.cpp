@@ -4,9 +4,34 @@
 #include "ops/Kernels.h"
 #include "ops/UnaryOps/Reduction.h"
 #include "ops/helpers/ConditionalOps.h"
+#include "core/AutogradMeta.h"
 
 namespace OwnTensor {
 namespace autograd {
+
+// Helper: Get edge to input tensor, creating/reusing GradAccumulator for leaves
+static Edge get_grad_edge(Tensor& tensor) {
+    if (tensor.grad_fn()) {
+        // Non-leaf: connect to existing grad_fn
+        return make_edge(tensor.grad_fn(), tensor.output_nr());
+    } else if (tensor.requires_grad()) {
+        // Leaf: get or create GradAccumulator from AutogradMeta
+        TensorImpl* impl = tensor.unsafeGetTensorImpl();
+        if (impl->has_autograd_meta()) {
+            auto* meta = static_cast<AutogradMeta*>(impl->autograd_meta());
+            
+            // Try to get existing accumulator
+            auto accumulator = meta->grad_accumulator_.lock();
+            if (!accumulator) {
+                // Create new one and cache it
+                accumulator = std::make_shared<GradAccumulator>(impl);
+                meta->grad_accumulator_ = accumulator;
+            }
+            return make_edge(accumulator, 0);
+        }
+    }
+    return Edge{};  // No gradient needed
+}
 
 Tensor add(const Tensor& a, const Tensor& b) {
     // Forward pass
@@ -16,12 +41,15 @@ Tensor add(const Tensor& a, const Tensor& b) {
     if (a.requires_grad() || b.requires_grad()) {
         auto grad_fn = std::make_shared<AddBackward>();
         
-        // Set up edges to inputs
+        // Set up edges to inputs (mutable refs needed for GradAccumulator)
+        Tensor& a_mut = const_cast<Tensor&>(a);
+        Tensor& b_mut = const_cast<Tensor&>(b);
+        
         if (a.requires_grad()) {
-            grad_fn->set_next_edge(0, make_edge(a.grad_fn(), a.output_nr()));
+            grad_fn->set_next_edge(0, get_grad_edge(a_mut));
         }
         if (b.requires_grad()) {
-            grad_fn->set_next_edge(1, make_edge(b.grad_fn(), b.output_nr()));
+            grad_fn->set_next_edge(1, get_grad_edge(b_mut));
         }
         
         result.set_grad_fn(grad_fn);
@@ -40,11 +68,14 @@ Tensor mul(const Tensor& a, const Tensor& b) {
         auto grad_fn = std::make_shared<MulBackward>(a, b);
         
         // Set up edges to inputs
+        Tensor& a_mut = const_cast<Tensor&>(a);
+        Tensor& b_mut = const_cast<Tensor&>(b);
+        
         if (a.requires_grad()) {
-            grad_fn->set_next_edge(0, make_edge(a.grad_fn(), a.output_nr()));
+            grad_fn->set_next_edge(0, get_grad_edge(a_mut));
         }
         if (b.requires_grad()) {
-            grad_fn->set_next_edge(1, make_edge(b.grad_fn(), b.output_nr()));
+            grad_fn->set_next_edge(1, get_grad_edge(b_mut));
         }
         
         result.set_grad_fn(grad_fn);
@@ -63,11 +94,14 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
         auto grad_fn = std::make_shared<MatmulBackward>(a, b);
         
         // Set up edges to inputs
+        Tensor& a_mut = const_cast<Tensor&>(a);
+        Tensor& b_mut = const_cast<Tensor&>(b);
+        
         if (a.requires_grad()) {
-            grad_fn->set_next_edge(0, make_edge(a.grad_fn(), a.output_nr()));
+            grad_fn->set_next_edge(0, get_grad_edge(a_mut));
         }
         if (b.requires_grad()) {
-            grad_fn->set_next_edge(1, make_edge(b.grad_fn(), b.output_nr()));
+            grad_fn->set_next_edge(1, get_grad_edge(b_mut));
         }
         
         result.set_grad_fn(grad_fn);
@@ -87,7 +121,8 @@ Tensor relu(const Tensor& x) {
         auto grad_fn = std::make_shared<ReluBackward>(x);
         
         // Set up edge to input
-        grad_fn->set_next_edge(0, make_edge(x.grad_fn(), x.output_nr()));
+        Tensor& x_mut = const_cast<Tensor&>(x);
+        grad_fn->set_next_edge(0, get_grad_edge(x_mut));
         
         result.set_grad_fn(grad_fn);
         result.set_requires_grad(true);
@@ -105,7 +140,8 @@ Tensor sum(const Tensor& x) {
         auto grad_fn = std::make_shared<SumBackward>(x.shape());
         
         // Set up edge to input
-        grad_fn->set_next_edge(0, make_edge(x.grad_fn(), x.output_nr()));
+        Tensor& x_mut = const_cast<Tensor&>(x);
+        grad_fn->set_next_edge(0, get_grad_edge(x_mut));
         
         result.set_grad_fn(grad_fn);
         result.set_requires_grad(true);
@@ -123,7 +159,8 @@ Tensor mean(const Tensor& x) {
         auto grad_fn = std::make_shared<MeanBackward>(x.shape(), x.numel());
         
         // Set up edge to input
-        grad_fn->set_next_edge(0, make_edge(x.grad_fn(), x.output_nr()));
+        Tensor& x_mut = const_cast<Tensor&>(x);
+        grad_fn->set_next_edge(0, get_grad_edge(x_mut));
         
         result.set_grad_fn(grad_fn);
         result.set_requires_grad(true);

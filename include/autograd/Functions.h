@@ -103,5 +103,21 @@ public:
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
+/**
+ * @brief Gradient accumulator for leaf tensors
+ * 
+ * This node accumulates gradients into a leaf tensor's AutogradMeta.
+ * It's used as the terminal node in the backward graph for parameters.
+ */
+class GradAccumulator : public Node {
+private:
+    TensorImpl* leaf_impl_;  // Non-owning pointer to leaf tensor's impl
+    
+public:
+    explicit GradAccumulator(TensorImpl* impl);
+    
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
 } // namespace autograd
 } // namespace OwnTensor
