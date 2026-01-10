@@ -82,7 +82,7 @@ size_t TensorImpl::nbytes() const {
 }
 
 int64_t TensorImpl::ndim() const {
-    return static_cast<int64_t>(shape_.dims.size());
+    return static_cast<int64_t>(shape_.dims.size()); //can use size_t and remove static cast
 }
 
 // ============================================================================
@@ -117,7 +117,7 @@ const void* TensorImpl::data() const {
 
 void TensorImpl::set_requires_grad(bool requires_grad) {
     if (requires_grad && !autograd_meta_) {
-        // Lazy allocation of autograd metadata
+        // Lazy allocation of autograd metadata - this happens if the tensor created with autograd_meta_ = false
         autograd_meta_ = std::make_unique<AutogradMeta>(true);
     } else if (autograd_meta_) {
         autograd_meta_->set_requires_grad(requires_grad, this);

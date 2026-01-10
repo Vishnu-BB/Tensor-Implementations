@@ -37,7 +37,7 @@ int main() {
         // Create Data
         auto cpu_opts = TensorOptions().with_device(Device::CPU).with_dtype(Dtype::Float32);
         
-        Tensor input = Tensor::randn(Shape{{batch_size, in_features}}, cpu_opts);
+        Tensor input = Tensor::randn<float>(Shape{{batch_size, in_features}}, cpu_opts);
         // Note: zeros creates expected output for testing
         Tensor labels = Tensor::zeros(Shape{{batch_size, out_features}}, cpu_opts);
         

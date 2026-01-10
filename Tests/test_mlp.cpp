@@ -14,11 +14,11 @@ int main() {
     
     // Layer 1: W1 (2x3), b1 (3)
     TensorOptions req_grad = TensorOptions().with_req_grad(true);
-    Tensor W1 = Tensor::randn(Shape{{2, 3}}, req_grad) * 0.5f;
+    Tensor W1 = Tensor::randn<float>(Shape{{2, 3}}, req_grad, 0.1f ) * 0.5f;
     Tensor b1 = Tensor::zeros(Shape{{3}}, req_grad);
     
     // Layer 2: W2 (3x1), b2 (1)
-    Tensor W2 = Tensor::randn(Shape{{3, 1}}, req_grad) * 0.5f;
+    Tensor W2 = Tensor::randn<float>(Shape{{3, 1}}, req_grad) * 0.5f;
     Tensor b2 = Tensor::zeros(Shape{{1}}, req_grad);
     
     std::cout << "✓ Created W1 (2x3), b1 (3), W2 (3x1), b2 (1)\n";    std::cout << "✓ All parameters require_grad=true\n\n";

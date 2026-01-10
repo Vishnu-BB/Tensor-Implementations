@@ -99,12 +99,12 @@ public:
     /**
      * Get underlying uint8_t pointer (mutable)
      */
-    uint8_t* data_ptr() { return data_ptr_.get(); }
+    uint8_t* data_ptr() { return data_ptr_.get(); }     //Why????????
     
     /**
      * Get underlying uint8_t pointer (const)
      */
-    const uint8_t* data_ptr() const { return data_ptr_.get(); }
+    const uint8_t* data_ptr() const { return data_ptr_.get(); }   //Why????????
     
     /**
      * Get total number of bytes allocated

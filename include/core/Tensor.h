@@ -208,9 +208,14 @@ namespace OwnTensor
         static Tensor zeros(Shape shape, TensorOptions opts = {});
         static Tensor ones(Shape shape, TensorOptions opts = {});
         static Tensor full(Shape shape, TensorOptions, float val);
-        static Tensor rand(Shape shape, TensorOptions opts);
-        static Tensor randn(Shape shape, TensorOptions opts);
+        // static Tensor rand(Shape shape, TensorOptions opts);
+        template <typename U>
+        static Tensor rand(Shape shape, TensorOptions opts,unsigned long seed = 42, U lower = U(0), U upper = U(0));
 
+        //static Tensor randn(Shape shape, TensorOptions opts);
+        template <typename U>
+        static Tensor randn(Shape shape, TensorOptions opts,unsigned long seed=42 , U sd = U(1));
+        
         //#######################################################
         // View Operations
         //#######################################################
@@ -285,7 +290,3 @@ namespace OwnTensor
     };
 }
 
-// End of namespace OwnTensor
-// #include "dtype/DtypeTraits.h"
-// #include "core/TensorDataManip.h"
-// #include "core/TensorDispatch.h"
