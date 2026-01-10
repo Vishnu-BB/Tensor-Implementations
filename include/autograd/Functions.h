@@ -17,6 +17,7 @@ class AddBackward : public Node {
 public:
     AddBackward() : Node(2) {}  // 2 inputs
     
+    std::string name() const override { return "AddBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -34,6 +35,7 @@ private:
 public:
     MulBackward(const Tensor& a, const Tensor& b);
     
+    std::string name() const override { return "MulBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -51,6 +53,7 @@ private:
 public:
     MatmulBackward(const Tensor& a, const Tensor& b);
     
+    std::string name() const override { return "MatmulBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -67,6 +70,7 @@ private:
 public:
     explicit ReluBackward(const Tensor& input);
     
+    std::string name() const override { return "ReluBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -83,6 +87,7 @@ private:
 public:
     explicit SumBackward(const Shape& input_shape);
     
+    std::string name() const override { return "SumBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -100,6 +105,7 @@ private:
 public:
     MeanBackward(const Shape& input_shape, int64_t numel);
     
+    std::string name() const override { return "MeanBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
@@ -116,6 +122,7 @@ private:
 public:
     explicit GradAccumulator(TensorImpl* impl);
     
+    std::string name() const override { return "GradAccumulator"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
