@@ -19,9 +19,9 @@ int main() {
     TensorOptions no_grad = TensorOptions().with_req_grad(false);
     
     // Initialize weights (small values)
-    Tensor W1 = Tensor::randn(Shape{{2, 4}}, req_grad);
+    Tensor W1 = Tensor::randn<float>(Shape{{2, 4}}, req_grad);
     Tensor b1 = Tensor::zeros(Shape{{4}}, req_grad);
-    Tensor W2 = Tensor::randn(Shape{{4, 1}}, req_grad);
+    Tensor W2 = Tensor::randn<float>(Shape{{4, 1}}, req_grad);
     Tensor b2 = Tensor::zeros(Shape{{1}}, req_grad);
     
     // Training data: y = x1 + x2

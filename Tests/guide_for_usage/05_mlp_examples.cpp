@@ -50,7 +50,7 @@ public:
         
         // Xavier initialization
         float std = std::sqrt(2.0f / (in_features + out_features));
-        weight_ = Tensor::randn(Shape{{out_features, in_features}}, opts);
+        weight_ = Tensor::randn<float>(Shape{{out_features, in_features}}, opts);
         
         // Scale weights
         float* w = const_cast<float*>(weight_.data<float>());
@@ -176,7 +176,7 @@ int main() {
         std::cout << "Number of parameter tensors: " << params.size() << "\n\n";
         
         // Forward pass
-        Tensor x = Tensor::randn(Shape{{2, 4}}, TensorOptions().with_req_grad(true));
+        Tensor x = Tensor::randn<float>(Shape{{2, 4}}, TensorOptions().with_req_grad(true));
         Tensor y = mlp.forward(x);
         
         std::cout << "Input shape: [2, 4]\n";
@@ -193,8 +193,8 @@ int main() {
         Linear layer2(8, 1);
         
         // Synthetic data
-        Tensor X = Tensor::randn(Shape{{8, 4}}, TensorOptions());
-        Tensor Y = Tensor::randn(Shape{{8, 1}}, TensorOptions());
+        Tensor X = Tensor::randn<float>(Shape{{8, 4}}, TensorOptions());
+        Tensor Y = Tensor::randn<float>(Shape{{8, 1}}, TensorOptions());
         
         float lr = 0.01f;
         int epochs = 3;
@@ -203,7 +203,7 @@ int main() {
         
         for (int epoch = 0; epoch < epochs; epoch++) {
             // Create gradient-enabled copy
-            Tensor x = Tensor::randn(Shape{{8, 4}}, TensorOptions().with_req_grad(true));
+            Tensor x = Tensor::randn<float>(Shape{{8, 4}}, TensorOptions().with_req_grad(true));
             const float* X_data = X.data<float>();
             float* x_data = const_cast<float*>(x.data<float>());
             for (size_t i = 0; i < X.numel(); i++) x_data[i] = X_data[i];

@@ -86,7 +86,7 @@ public:
     Linear(int64_t in_f, int64_t out_f) {
         name_ = "Linear";
         TensorOptions opts = TensorOptions().with_req_grad(true);
-        weight_ = Tensor::randn(Shape{{out_f, in_f}}, opts);
+        weight_ = Tensor::randn<float>(Shape{{out_f, in_f}}, opts);
         bias_ = Tensor::zeros(Shape{{out_f}}, opts);
     }
     
@@ -167,7 +167,7 @@ int main() {
     std::cout << "=== 3. Residual Block ===\n\n";
     {
         ResidualBlock res(8);
-        Tensor x = Tensor::randn(Shape{{2, 8}}, opts);
+        Tensor x = Tensor::randn<float>(Shape{{2, 8}}, opts);
         Tensor y = res.forward(x);
         std::cout << "ResidualBlock(8) with skip connection\n";
         std::cout << "Output = F(x) + x (residual connection)\n";

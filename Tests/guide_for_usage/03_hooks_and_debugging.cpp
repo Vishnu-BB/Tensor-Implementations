@@ -34,7 +34,7 @@ int main() {
     std::cout << "=== 1. Registering Tensor Hooks ===\n\n";
     
     TensorOptions opts = TensorOptions().with_req_grad(true);
-    Tensor x = Tensor::randn(Shape{{2, 2}}, opts);
+    Tensor x = Tensor::randn<float>(Shape{{2, 2}}, opts);
     
     // Register a gradient hook on tensor
     // This hook will be called when gradient is computed
@@ -107,7 +107,7 @@ int main() {
     // =========================================================================
     std::cout << "=== 4. SavedVariable for Safe Tensor Storage ===\n\n";
     
-    Tensor saved_tensor = Tensor::randn(Shape{{3, 3}}, opts);
+    Tensor saved_tensor = Tensor::randn<float>(Shape{{3, 3}}, opts);
     
     // Save the tensor (stores version for in-place detection)
     SavedVariable saved(saved_tensor, false);  // false = not an output

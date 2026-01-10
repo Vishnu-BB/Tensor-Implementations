@@ -46,7 +46,7 @@ int main() {
     print_tensor("ones(2,3)", ones);
     
     // Method 3: Random normal
-    Tensor randn = Tensor::randn(Shape{{2, 2}}, TensorOptions());
+    Tensor randn = Tensor::randn<float>(Shape{{2, 2}}, TensorOptions());
     print_tensor("randn(2,2)", randn);
     std::cout << "  Values: ";
     const float* data = randn.data<float>();
@@ -56,7 +56,7 @@ int main() {
     std::cout << "\n\n";
     
     // Method 4: With requires_grad for autograd
-    Tensor with_grad = Tensor::randn(Shape{{3, 3}}, 
+    Tensor with_grad = Tensor::randn<float>(Shape{{3, 3}}, 
                                       TensorOptions().with_req_grad(true));
     print_tensor("with_grad(3,3)", with_grad);
     std::cout << "  requires_grad: " << (with_grad.requires_grad() ? "true" : "false") << "\n\n";
@@ -121,7 +121,7 @@ int main() {
     // =========================================================================
     std::cout << "=== 4. Reductions ===\n\n";
     
-    Tensor vals = Tensor::randn(Shape{{3, 3}}, TensorOptions());
+    Tensor vals = Tensor::randn<float>(Shape{{3, 3}}, TensorOptions());
     
     // Sum
     Tensor s = autograd::sum(vals);
@@ -136,7 +136,7 @@ int main() {
     // =========================================================================
     std::cout << "=== 5. Transpose ===\n\n";
     
-    Tensor orig = Tensor::randn(Shape{{2, 3}}, TensorOptions());
+    Tensor orig = Tensor::randn<float>(Shape{{2, 3}}, TensorOptions());
     Tensor transposed = orig.t();
     
     print_tensor("original", orig);

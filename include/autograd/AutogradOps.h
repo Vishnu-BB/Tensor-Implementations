@@ -1,50 +1,18 @@
 #pragma once
 
-#include "core/Tensor.h"
-#include "autograd/Functions.h"
-#include "autograd/Node.h"
-
-namespace OwnTensor {
-namespace autograd {
-
 /**
- * @brief Autograd-aware operations that automatically build computational graph.
+ * @file AutogradOps.h
+ * @brief Umbrella header for all autograd-aware operations.
  * 
- * These functions:
- * 1. Perform the forward computation
- * 2. If inputs require_grad, attach grad_fn to result
- * 3. Set up graph edges for backward pass
+ * This file provides backward compatibility by including all
+ * segregated operation headers. Existing code using:
+ *   #include "autograd/AutogradOps.h"
+ * will continue to work unchanged.
  */
 
-/**
- * @brief Autograd-aware addition
- */
-Tensor add(const Tensor& a, const Tensor& b);
-
-/**
- * @brief Autograd-aware multiplication
- */
-Tensor mul(const Tensor& a, const Tensor& b);
-
-/**
- * @brief Autograd-aware matrix multiplication
- */
-Tensor matmul(const Tensor& a, const Tensor& b);
-
-/**
- * @brief Autograd-aware ReLU
- */
-Tensor relu(const Tensor& x);
-
-/**
- * @brief Autograd-aware sum    
- */
-Tensor sum(const Tensor& x);
-
-/**
- * @brief Autograd-aware mean
- */
-Tensor mean(const Tensor& x);
-
-} // namespace autograd
-} // namespace OwnTensor
+// Include all operation categories
+#include "autograd/operations/BinaryOps.h"
+#include "autograd/operations/MatrixOps.h"
+#include "autograd/operations/ActivationOps.h"
+#include "autograd/operations/ReductionOps.h"
+#include "autograd/operations/LossOps.h"

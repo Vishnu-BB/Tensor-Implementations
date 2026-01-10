@@ -1,4 +1,4 @@
-#include "/home/blubridge-036/Madhu_folder/Tensor-Implementations/include/mlp/activation.h"
+#include "mlp/activation.h"
 
 namespace OwnTensor
 {

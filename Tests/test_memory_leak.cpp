@@ -11,8 +11,8 @@ void run_iteration() {
     TensorOptions req_grad = TensorOptions().with_req_grad(true);
     
     // Create tensors
-    Tensor t1 = Tensor::randn(Shape{{10, 10}}, req_grad);
-    Tensor t2 = Tensor::randn(Shape{{10, 10}}, req_grad);
+    Tensor t1 = Tensor::randn<float>(Shape{{10, 10}}, req_grad);
+    Tensor t2 = Tensor::randn<float>(Shape{{10, 10}}, req_grad);
     
     // Build graph: v3 = (t1 + t2) * t1
     Tensor v1 = autograd::add(t1, t2);

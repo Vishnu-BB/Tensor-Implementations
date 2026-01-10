@@ -36,7 +36,7 @@ bool test_basic_save_unpack() {
     TEST_SECTION("Test 1: Basic Save/Unpack");
     
     TensorOptions opts = TensorOptions().with_req_grad(true);
-    Tensor t = Tensor::randn(Shape{{3, 3}}, opts);
+    Tensor t = Tensor::randn<float>(Shape{{3, 3}}, opts);
     
     // Fill with known values (using const_cast since Tensor doesn't expose mutable_data)
     float* data = const_cast<float*>(t.data<float>());

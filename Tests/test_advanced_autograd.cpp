@@ -186,7 +186,7 @@ bool test_autograd_context() {
     // Create tensors to save
     TensorOptions opts = TensorOptions().with_req_grad(true);
     Tensor a = Tensor::ones(Shape{{2, 2}}, opts);
-    Tensor b = Tensor::randn(Shape{{2, 2}}, opts);
+    Tensor b = Tensor::randn<float>(Shape{{2, 2}}, opts);
     
     // Save for backward
     ctx.save_for_backward({a, b});
@@ -232,8 +232,8 @@ bool test_regression() {
     TensorOptions opts = TensorOptions().with_req_grad(true);
     
     // Simple forward
-    Tensor a = Tensor::randn(Shape{{3, 3}}, opts);
-    Tensor b = Tensor::randn(Shape{{3, 3}}, opts);
+    Tensor a = Tensor::randn<float>(Shape{{3, 3}}, opts);
+    Tensor b = Tensor::randn<float>(Shape{{3, 3}}, opts);
     
     // Verify requires_grad
     if (!a.requires_grad()) {

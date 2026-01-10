@@ -31,8 +31,8 @@ int main() {
     // Enable gradient tracking with TensorOptions
     TensorOptions opts = TensorOptions().with_req_grad(true);
     
-    Tensor x = Tensor::randn(Shape{{2, 2}}, opts);
-    Tensor w = Tensor::randn(Shape{{2, 2}}, opts);
+    Tensor x = Tensor::randn<float>(Shape{{2, 2}}, opts);
+    Tensor w = Tensor::randn<float>(Shape{{2, 2}}, opts);
     
     std::cout << "x.requires_grad(): " << (x.requires_grad() ? "true" : "false") << "\n";
     std::cout << "x.is_leaf(): " << (x.is_leaf() ? "true" : "false") << "\n\n";
