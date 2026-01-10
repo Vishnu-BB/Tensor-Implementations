@@ -37,7 +37,7 @@ Tensor matmul(const Tensor& a, const Tensor& b);
 Tensor relu(const Tensor& x);
 
 /**
- * @brief Autograd-aware sum
+ * @brief Autograd-aware sum    
  */
 Tensor sum(const Tensor& x);
 
