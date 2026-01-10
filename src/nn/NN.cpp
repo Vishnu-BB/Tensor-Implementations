@@ -24,6 +24,27 @@ void Module::zero_grad() {
     }
 }
 
+void Module::to(DeviceIndex dev) {
+    for (auto& p : params_) {
+        if (p.is_valid() && p.device() != dev) {
+            // Create new tensor on target device with same properties
+            TensorOptions opts = TensorOptions()
+                .with_dtype(p.dtype())
+                .with_device(dev)
+                .with_req_grad(p.requires_grad());
+            
+            Tensor new_tensor(p.shape(), opts);
+            
+            // Copy data from old tensor to new tensor
+            size_t num_bytes = p.numel() * Tensor::dtype_size(p.dtype());
+            std::memcpy(new_tensor.data(), p.data(), num_bytes);
+            
+            // Replace the parameter
+            p = new_tensor;
+        }
+    }
+}
+
 Tensor Module::operator()(const Tensor& input) {
     return forward(input);
 }

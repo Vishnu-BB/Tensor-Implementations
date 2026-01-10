@@ -25,6 +25,9 @@ public:
     // Zero gradients
     void zero_grad();
     
+    // Move module parameters to device
+    void to(DeviceIndex dev);
+    
     // Operator() alias for forward
     Tensor operator()(const Tensor& input);
     

@@ -17,6 +17,14 @@ namespace OwnTensor
 
         bool is_cpu() const { return device == Device::CPU;}
         bool is_cuda() const { return device == Device::CUDA;}
+        
+        // Comparison operators
+        bool operator==(const DeviceIndex& other) const {
+            return device == other.device && index == other.index;
+        }
+        bool operator!=(const DeviceIndex& other) const {
+            return !(*this == other);
+        }
     };
 }
 
