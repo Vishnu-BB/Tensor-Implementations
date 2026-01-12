@@ -107,6 +107,10 @@ namespace OwnTensor
             impl->dtype(),
             impl->device()
         );
+
+        if (impl->requires_grad()) {
+            impl_->set_requires_grad(true);
+        }
     }
 
     // Main implementation

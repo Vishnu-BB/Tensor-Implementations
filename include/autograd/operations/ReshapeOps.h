@@ -1,0 +1,19 @@
+#pragma once
+
+#include "core/Tensor.h"
+
+namespace OwnTensor {
+namespace autograd {
+
+/**
+ * @brief Autograd-aware reshape operation
+ */
+Tensor reshape(const Tensor& input, Shape new_shape);
+
+/**
+ * @brief Autograd-aware view operation
+ */
+Tensor view(const Tensor& input, Shape new_shape);
+
+} // namespace autograd
+} // namespace OwnTensor

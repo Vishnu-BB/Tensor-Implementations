@@ -10,6 +10,7 @@
 
 // Core Library Includes
 #include "device/AllocatorRegistry.h"
+#include "device/DeviceCore.h"
 
 // Datatype and Traits
 #include "dtype/DtypeTraits.h"
@@ -28,6 +29,15 @@
 
 // ConditionalOps.h
 #include "ops/helpers/ConditionalOps.h"
+
+// Autograd
+#include "autograd/AutogradOps.h"
+#include "autograd/Engine.h"
+
+// Neural Network and Optimizer
+#include "nn/NN.h"
+#include "nn/optimizer/Optim.h"
+#include "nn/optimizer/LossScaler.h"
 
 // Reductions Utils
 

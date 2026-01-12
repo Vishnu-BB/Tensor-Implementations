@@ -25,5 +25,13 @@ Tensor binary_cross_entropy(const Tensor& predictions, const Tensor& targets);
  */
 Tensor categorical_cross_entropy(const Tensor& predictions, const Tensor& targets);
 
+/**
+ * @brief Autograd-aware sparse cross entropy with logits
+ * 
+ * Takes logits (B, ..., V) and targets (B, ...) where V is vocab size.
+ * Returns the loss per element.
+ */
+Tensor sparse_cross_entropy_with_logits(const Tensor& logits, const Tensor& targets);
+
 } // namespace autograd
 } // namespace OwnTensor

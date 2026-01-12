@@ -78,5 +78,23 @@ public:
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
+/**
+ * @brief Backward function for sparse cross entropy with logits
+ * 
+ * Backward: grad_logits = softmax(logits) - one_hot(target)
+ */
+class SparseCrossEntropyBackward : public Node {
+private:
+    Tensor saved_logits_;
+    Tensor saved_target_;
+    int64_t dim_;
+    
+public:
+    SparseCrossEntropyBackward(const Tensor& logits, const Tensor& target, int64_t dim = -1);
+    
+    std::string name() const override { return "SparseCrossEntropyBackward"; }
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
 } // namespace autograd
 } // namespace OwnTensor

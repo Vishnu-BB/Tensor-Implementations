@@ -15,11 +15,27 @@ std::vector<Tensor> Module::parameters() {
     return params_;
 }
 
+void Module::to(DeviceIndex dev) {
+    // We override to() in leaf modules to update members.
+    // Base class to() just iterates over parameters and moves them.
+    // Note: To actually update members, we need to assign back.
+    // Since parameters() returns by value, we need a better way.
+    // Let's just make to() virtual as well if needed, or let 
+    // leaf modules handle it.
+    for (auto& p : parameters()) {
+        p = p.to(dev);
+    }
+}
+
 void Module::zero_grad() {
-    for (auto& p : params_) {
+    for (auto& p : parameters()) {
         // Only attempt to zero gradients if they require grad and exist
-        if (p.requires_grad() && p.grad() != nullptr) {
-            p.fill_grad(0.0f);
+        if (p.requires_grad()) {
+            try {
+                p.fill_grad(0.0f);
+            } catch (...) {
+                // If gradient not allocated, that's fine for zero_grad
+            }
         }
     }
 }
@@ -67,6 +83,17 @@ Tensor Linear::forward(const Tensor& input) {
     return z;
 }
 
+std::vector<Tensor> Linear::parameters() {
+    std::vector<Tensor> p = {weight};
+    if (bias.is_valid()) p.push_back(bias);
+    return p;
+}
+
+void Linear::to(DeviceIndex dev) {
+    weight = weight.to(dev);
+    if (bias.is_valid()) bias = bias.to(dev);
+}
+
 // ============================================================================
 // ReLU
 // ============================================================================
@@ -88,11 +115,6 @@ Embedding::Embedding(int num_embeddings, int embedding_dim, int padding_idx)
     
     // Zero out padding row if requested
     if (padding_idx >= 0 && padding_idx < num_embeddings) {
-        // We lack a precise "row slice" setter that's easy, 
-        // but we can do a quick manual fill for CPU or just assume it's small for now.
-        // For now, let's just initialize it normally and let user zero it if they want, 
-        // or we can implement it if needed. 
-        // PyTorch zeros it.
         float* w_ptr = weight.data<float>();
         std::fill(w_ptr + (size_t)padding_idx * embedding_dim, 
                   w_ptr + (size_t)(padding_idx + 1) * embedding_dim, 0.0f);
@@ -103,6 +125,14 @@ Embedding::Embedding(int num_embeddings, int embedding_dim, int padding_idx)
 
 Tensor Embedding::forward(const Tensor& input) {
     return autograd::embedding(input, weight, padding_idx);
+}
+
+std::vector<Tensor> Embedding::parameters() {
+    return {weight};
+}
+
+void Embedding::to(DeviceIndex dev) {
+    weight = weight.to(dev);
 }
 
 // ============================================================================
@@ -137,6 +167,21 @@ Tensor Sequential::forward(const Tensor& input) {
         x = m->forward(x);
     }
     return x;
+}
+
+std::vector<Tensor> Sequential::parameters() {
+    std::vector<Tensor> all_params;
+    for (auto& m : modules_) {
+        auto sub_params = m->parameters();
+        all_params.insert(all_params.end(), sub_params.begin(), sub_params.end());
+    }
+    return all_params;
+}
+
+void Sequential::to(DeviceIndex dev) {
+    for (auto& m : modules_) {
+        m->to(dev);
+    }
 }
 
 // ============================================================================

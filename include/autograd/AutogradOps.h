@@ -15,4 +15,5 @@
 #include "autograd/operations/MatrixOps.h"
 #include "autograd/operations/ActivationOps.h"
 #include "autograd/operations/ReductionOps.h"
+#include "autograd/operations/ReshapeOps.h"
 #include "autograd/operations/LossOps.h"

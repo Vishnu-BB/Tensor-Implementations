@@ -13,8 +13,11 @@ namespace autograd {
  * Backward: grad_a = grad_out, grad_b = grad_out
  */
 class AddBackward : public Node {
+private:
+    Tensor saved_a_;
+    Tensor saved_b_;
 public:
-    AddBackward() : Node(2) {}  // 2 inputs
+    AddBackward(const Tensor& a, const Tensor& b);
     
     std::string name() const override { return "AddBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
@@ -45,8 +48,11 @@ public:
  * Backward: grad_a = grad_out, grad_b = -grad_out
  */
 class SubBackward : public Node {
+private:
+    Tensor saved_a_;
+    Tensor saved_b_;
 public:
-    SubBackward() : Node(2) {}  // 2 inputs
+    SubBackward(const Tensor& a, const Tensor& b);
     
     std::string name() const override { return "SubBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;

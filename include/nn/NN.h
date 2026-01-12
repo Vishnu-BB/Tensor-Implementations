@@ -26,7 +26,7 @@ public:
     void zero_grad();
     
     // Move module parameters to device
-    void to(DeviceIndex dev);
+    virtual void to(DeviceIndex dev);
     
     // Operator() alias for forward
     Tensor operator()(const Tensor& input);
@@ -49,6 +49,8 @@ public:
     Linear(int in_features, int out_features, bool bias = true);
     
     Tensor forward(const Tensor& input) override;
+    std::vector<Tensor> parameters() override;
+    void to(DeviceIndex dev) override;
 };
 
 class ReLU : public Module {
@@ -64,6 +66,8 @@ public:
     Embedding(int num_embeddings, int embedding_dim, int padding_idx = -1);
     
     Tensor forward(const Tensor& input) override;
+    std::vector<Tensor> parameters() override;
+    void to(DeviceIndex dev) override;
 };
 
 // ============================================================================
@@ -81,6 +85,8 @@ public:
     void add(std::shared_ptr<Module> module);
     
     Tensor forward(const Tensor& input) override;
+    std::vector<Tensor> parameters() override;
+    void to(DeviceIndex dev) override;
 };
 
 // ============================================================================

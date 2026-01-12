@@ -44,25 +44,14 @@ template<> struct DtypeToType<Dtype::Float64> { using type = double; };
 //Boolean type
 template<> struct DtypeToType<Dtype::Bool> { using type = bool;};
 
-// Half precision types - resolve based on compilation context
-#ifdef __CUDACC__
-    template<> struct DtypeToType<Dtype::Float16>  { using type = __half; };
-    template<> struct DtypeToType<Dtype::Bfloat16> { using type = __nv_bfloat16; };
-    template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
-    template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
-    template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
-    template<> struct DtypeToType<Dtype::Float4_e2m1> { using type = float4_e2m1_t; };
-    template<> struct DtypeToType<Dtype::Float4_e2m1_2x> { using type = float4_e2m1_2x_t; };
-#else
-    // CPU compilation - use custom types
-    template<> struct DtypeToType<Dtype::Float16>  { using type = float16_t; };
-    template<> struct DtypeToType<Dtype::Bfloat16> { using type = bfloat16_t; };
-    template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
-    template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
-    template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
-    template<> struct DtypeToType<Dtype::Float4_e2m1> { using type = float4_e2m1_t; };
-    template<> struct DtypeToType<Dtype::Float4_e2m1_2x> { using type = float4_e2m1_2x_t; };
-#endif
+// Use custom types consistently across CPU and CUDA to ensure symbol names match
+template<> struct DtypeToType<Dtype::Float16>  { using type = float16_t; };
+template<> struct DtypeToType<Dtype::Bfloat16> { using type = bfloat16_t; };
+template<> struct DtypeToType<Dtype::Complex32> { using type = complex32_t; };
+template<> struct DtypeToType<Dtype::Complex64> { using type = complex64_t; };
+template<> struct DtypeToType<Dtype::Complex128> { using type = complex128_t; };
+template<> struct DtypeToType<Dtype::Float4_e2m1> { using type = float4_e2m1_t; };
+template<> struct DtypeToType<Dtype::Float4_e2m1_2x> { using type = float4_e2m1_2x_t; };
 
 //  Runtime dispatcher using the simple type resolver
 template<typename Func>
@@ -87,6 +76,21 @@ static auto dispatch_by_dtype(Dtype dtype, Func&& f) {
         // case Dtype::Float4_e2m1_2x: return f(typename DtypeToType<Dtype::Float4_e2m1_2x>::type{});
         default:
             throw std::runtime_error("Unsupported Dtype");
+    }
+}
+
+template<typename Func>
+static auto dispatch_by_integer_dtype(Dtype dtype, Func&& f) {
+    switch(dtype) {
+        case Dtype::Int16:    return f(typename DtypeToType<Dtype::Int16>::type{});
+        case Dtype::Int32:    return f(typename DtypeToType<Dtype::Int32>::type{});
+        case Dtype::Int64:    return f(typename DtypeToType<Dtype::Int64>::type{});
+        case Dtype::UInt8:    return f(typename DtypeToType<Dtype::UInt8>::type{});
+        case Dtype::UInt16:   return f(typename DtypeToType<Dtype::UInt16>::type{});
+        case Dtype::UInt32:   return f(typename DtypeToType<Dtype::UInt32>::type{});
+        case Dtype::UInt64:   return f(typename DtypeToType<Dtype::UInt64>::type{});
+        default:
+            throw std::runtime_error("Unsupported Dtype for integer dispatch");
     }
 }
 

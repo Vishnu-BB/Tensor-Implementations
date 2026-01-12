@@ -1,14 +1,56 @@
 #include "autograd/backward/BinaryBackward.h"
 #include "ops/TensorOps.h"
 #include "ops/ScalarOps.h"
+#include "ops/UnaryOps/Reduction.h"
 #include <stdexcept>
+#include <vector>
 
 namespace OwnTensor {
 namespace autograd {
 
+static Tensor reduce_to_shape(const Tensor& grad, const Shape& target_shape) {
+    if (grad.shape() == target_shape) return grad;
+    
+    Tensor res = grad;
+    int64_t grad_ndim = grad.ndim();
+    int64_t target_ndim = target_shape.dims.size();
+    
+    std::vector<int64_t> dims_to_sum;
+    
+    // 1. Handle rank mismatch (leading dimensions)
+    if (grad_ndim > target_ndim) {
+        for (int64_t i = 0; i < grad_ndim - target_ndim; ++i) {
+            dims_to_sum.push_back(i);
+        }
+    }
+    
+    // 2. Handle broadcasting in shared dimensions
+    for (int64_t i = 0; i < target_ndim; ++i) {
+        int64_t target_dim_idx = target_ndim - 1 - i;
+        int64_t grad_dim_idx = grad_ndim - 1 - i;
+        
+        if (target_shape.dims[target_dim_idx] == 1 && grad.shape().dims[grad_dim_idx] > 1) {
+            dims_to_sum.push_back(grad_dim_idx);
+        }
+    }
+    
+    if (!dims_to_sum.empty()) {
+        res = reduce_sum(res, dims_to_sum, true);
+    }
+    
+    if (res.shape() != target_shape) {
+        res = res.reshape(target_shape);
+    }
+    
+    return res;
+}
+
 // ============================================================================
 // AddBackward
 // ============================================================================
+
+AddBackward::AddBackward(const Tensor& a, const Tensor& b)
+    : Node(2), saved_a_(a), saved_b_(b) {}
 
 std::vector<Tensor> AddBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) {
@@ -18,7 +60,8 @@ std::vector<Tensor> AddBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     
     // grad_a = grad_output, grad_b = grad_output
-    return {grad_output, grad_output};
+    return {reduce_to_shape(grad_output, saved_a_.shape()), 
+            reduce_to_shape(grad_output, saved_b_.shape())};
 }
 
 // ============================================================================
@@ -39,12 +82,16 @@ std::vector<Tensor> MulBackward::apply(std::vector<Tensor>&& grads) {
     Tensor grad_a = grad_output * saved_b_;
     Tensor grad_b = grad_output * saved_a_;
     
-    return {grad_a, grad_b};
+    return {reduce_to_shape(grad_a, saved_a_.shape()), 
+            reduce_to_shape(grad_b, saved_b_.shape())};
 }
 
 // ============================================================================
 // SubBackward
 // ============================================================================
+
+SubBackward::SubBackward(const Tensor& a, const Tensor& b)
+    : Node(2), saved_a_(a), saved_b_(b) {}
 
 std::vector<Tensor> SubBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) {
@@ -55,7 +102,8 @@ std::vector<Tensor> SubBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_a = grad_output, grad_b = -grad_output
     Tensor neg_grad = grad_output * -1.0f;
-    return {grad_output, neg_grad};
+    return {reduce_to_shape(grad_output, saved_a_.shape()), 
+            reduce_to_shape(neg_grad, saved_b_.shape())};
 }
 
 // ============================================================================
@@ -81,7 +129,8 @@ std::vector<Tensor> DivBackward::apply(std::vector<Tensor>&& grads) {
     Tensor b_sq = saved_b_ * saved_b_;
     Tensor grad_b = term2 / b_sq;
     
-    return {grad_a, grad_b};
+    return {reduce_to_shape(grad_a, saved_a_.shape()), 
+            reduce_to_shape(grad_b, saved_b_.shape())};
 }
 
 
