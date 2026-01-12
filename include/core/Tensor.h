@@ -102,6 +102,9 @@ namespace OwnTensor
 
         void set_requires_grad(bool req);
         Tensor grad_view() const;
+        TensorOptions opts() const{
+            return TensorOptions().with_device(device()).with_dtype(dtype()).with_req_grad(requires_grad());    
+        }
 
         // ######################################################
         // Data Accessors
@@ -207,6 +210,9 @@ namespace OwnTensor
 
         static Tensor zeros(Shape shape, TensorOptions opts = {});
         static Tensor ones(Shape shape, TensorOptions opts = {});
+        static Tensor empty(Shape shape, TensorOptions opts = {});
+        static Tensor slice(OwnTensor::Tensor& tensor, size_t start, size_t length);
+        static Tensor flatten_concat(const std::vector<Tensor>& tensor_list);
         static Tensor full(Shape shape, TensorOptions, float val);
         // static Tensor rand(Shape shape, TensorOptions opts);
         template <typename U>

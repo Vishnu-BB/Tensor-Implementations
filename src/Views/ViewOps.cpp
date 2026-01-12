@@ -1,7 +1,10 @@
 #include "core/Views/ViewUtils.h"
 #include "core/Tensor.h"
 #include "core/TensorImpl.h"
+#include "core/TensorDispatch.h"
+#include "device/DeviceTransfer.h"
 #include <stdexcept>
+#include <numeric>
 
 namespace OwnTensor {
 
@@ -134,6 +137,35 @@ Tensor Tensor::unflatten(int dim, Shape sizes) const
     Stride new_stride = ViewUtils::compute_unflatten_strides(impl_->strides(), dim, sizes);
 
     return Tensor(impl_, new_shape, new_stride, storage_offset());
+}
+
+Tensor Tensor::flatten_concat(const std::vector<Tensor>& tensor_list) {
+    if (tensor_list.empty()) {
+        return Tensor();
+    }
+
+    int64_t total_elements = std::accumulate(
+        tensor_list.begin(),
+        tensor_list.end(),
+        int64_t(0),
+        [](int64_t sum, const auto& tensor) {
+            return sum + tensor.numel();
+        }
+    );
+
+    Tensor result = Tensor({{1, total_elements}}, tensor_list[0].opts());
+    void* result_ptr = result.data();
+    int64_t running_pointer = 0;
+
+    for (const auto& tensor : tensor_list) {
+        dispatch_by_dtype(tensor.dtype(), [&](auto dummy) {
+            using T = decltype(dummy);
+            void* new_ptr = (static_cast<T*>(result_ptr) + running_pointer);
+            device::copy_memory(new_ptr, result.device().device, tensor.data(), tensor.device().device, tensor.nbytes());
+            running_pointer += tensor.numel();
+        });
+    }
+    return result;
 }
 
 } // namespace OwnTensor

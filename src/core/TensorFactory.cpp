@@ -79,6 +79,32 @@ namespace OwnTensor
         return tensor;
     }
 
+    Tensor Tensor::empty(Shape shape, TensorOptions opts)
+    {
+        Tensor tensor(shape, opts);
+
+        if (opts.device.is_cpu())
+        {
+            // CPU implementation - handles all 7 types automatically
+            dispatch_by_dtype(opts.dtype, [&](auto dummy)
+                {
+                    // using T = decltype(dummy);
+                    // tensor.fill(T(0.0f));
+                });
+        }
+        else
+        {
+            // GPU implementation - optimized with cudaMemset
+#ifdef WITH_CUDA
+            // cudaStream_t stream = OwnTensor::cuda::getCurrentStream();//✨✨✨
+            // cudaMemsetAsync(tensor.data(), 0, tensor.nbytes(), stream);//✨✨✨
+#else
+            throw std::runtime_error("CUDA not available");
+#endif
+        }
+        return tensor;
+    }
+
     Tensor Tensor::ones(Shape shape, TensorOptions opts)
     {
         Tensor tensor(shape, opts);

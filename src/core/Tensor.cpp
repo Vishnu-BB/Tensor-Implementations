@@ -919,4 +919,29 @@ template const complex128_t* Tensor::grad<complex128_t>() const;
     template void Tensor::fill<float4_e2m1_t>(float4_e2m1_t);
     template void Tensor::fill<float4_e2m1_2x_t>(float4_e2m1_2x_t);
 
+    Tensor Tensor::slice(OwnTensor::Tensor& tensor, size_t start, size_t length){
+        OwnTensor::TensorOptions opts = tensor.opts();
+
+        if(start > tensor.numel() || start + length > tensor.numel()){
+            throw std::runtime_error(
+                "range exceeded... (zero based indexing)"
+            );
+        }
+
+        OwnTensor::Tensor new_tensor = OwnTensor::Tensor({{1, static_cast<int64_t>(length)}}, opts);
+
+        dispatch_by_dtype(tensor.dtype(),[&](auto dummy){
+            // using T = decltype(dummy);
+
+            size_t byte_offset = start * OwnTensor::Tensor::dtype_size(tensor.dtype());
+            void* temp_pointer = static_cast<uint8_t*>(const_cast<void*>(tensor.data())) + byte_offset;
+
+            OwnTensor::device::copy_memory(new_tensor.data(), opts.device.device, temp_pointer, opts.device.device, length * OwnTensor::Tensor::dtype_size(tensor.dtype()));
+
+        });
+
+        
+        return new_tensor;
+    }
+
 } // namespace OwnTensor

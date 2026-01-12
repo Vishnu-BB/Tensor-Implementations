@@ -147,18 +147,8 @@ Sequential::Sequential(std::initializer_list<Module*> modules) {
 
 void Sequential::add(std::shared_ptr<Module> module) {
     modules_.push_back(module);
-    
-    // Register parameters from submodule
-    auto sub_params = module->parameters();
-    // Insert parameters into our params list so optimizer can see them easily
-    // Note: This flattens parameters. If submodules change params later, this won't track.
-    // Ideally parameters() should always recurse.
-    // But for this simple implementation, copying is okay if structure is static.
-    // A better implementation of parameters() would be recursive.
-    // Let's make parameters() recursive instead of registering?
-    // But then register_parameter needs to store locally.
-    // Let's stick to the flattening for now as per test_mlp_lib.cpp logic
-    params_.insert(params_.end(), sub_params.begin(), sub_params.end());
+    // REMOVED: stale parameter flattening here. 
+    // Sequential::parameters() is recursive and will find them dynamically.
 }
 
 Tensor Sequential::forward(const Tensor& input) {
