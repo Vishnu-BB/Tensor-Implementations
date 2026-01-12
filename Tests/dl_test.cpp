@@ -136,10 +136,10 @@ public:
 
         OwnTensor::Device dev = OwnTensor::device::cuda_available() ? OwnTensor::Device::CUDA : OwnTensor::Device::CPU;
         
-        b.input = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}}, {OwnTensor::Dtype::UInt16, OwnTensor::DeviceIndex(dev)});
+        b.input = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}}, {OwnTensor::Dtype::UInt16, OwnTensor::DeviceIndex(dev, 0)});
         b.input.set_data(x);
         
-        b.target = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}}, {OwnTensor::Dtype::UInt16, OwnTensor::DeviceIndex(dev)});
+        b.target = OwnTensor::Tensor(OwnTensor::Shape{{B_, T_}}, {OwnTensor::Dtype::UInt16, OwnTensor::DeviceIndex(dev, 0)});
         b.target.set_data(y);
 
         pos_ += BT * static_cast<size_t>(world_);
@@ -163,9 +163,9 @@ private:
 
 int main() {
     try {
-        const int B = 4;
-        const int T = 8;
-        const int V = 128; // Vocabulary size
+        const int B = 16;
+        const int T = 16;
+        const int V = 16; // Vocabulary size
 
         DataLoaderLite loader(B, T, 0, 1, "train", "./dummy_data");
         Batch batch = loader.next_batch();
@@ -174,21 +174,34 @@ int main() {
 
         // Create a dummy model (Embedding layer)
         OwnTensor::Device dev = OwnTensor::device::cuda_available() ? OwnTensor::Device::CUDA : OwnTensor::Device::CPU;
-        OwnTensor::DeviceIndex dev_idx = OwnTensor::DeviceIndex(dev);
+        OwnTensor::DeviceIndex dev_idx = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, 0);
 
         // Create a dummy model (Embedding layer)
         OwnTensor::nn::Embedding embed(V, 32);
-        OwnTensor::nn::Linear linear(32, V);
+        // OwnTensor::nn::Linear linear(32, V);
+        OwnTensor::nn::Sequential model({
+            new OwnTensor::nn::Linear(32, 4*32),
+            new OwnTensor::nn::ReLU(),
+            new OwnTensor::nn::Linear(4*32, V)
+        });
+        embed.to(dev_idx);
+        model.to(OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, 0));
 
-        if (dev == OwnTensor::Device::CUDA) {
-            embed.to(dev_idx);
-            linear.to(dev_idx);
+        for(auto& params: model.parameters()){
+            params.to(dev_idx);
         }
+        std::cout << "Completed";
+        // if (dev == OwnTensor::Device::CUDA) {
+            
+        //     linear.to(dev_idx);
+        // }
         
         // Forward pass
         OwnTensor::Tensor x = embed.forward(batch.input);
+        std::cout << "Started1";
         std::cout << "Embed output requires_grad: " << x.requires_grad() << std::endl;
-        OwnTensor::Tensor logits = linear.forward(x);
+        OwnTensor::Tensor logits = model.forward(x);
+        std::cout << "Started2";
         std::cout << "Logits requires_grad: " << logits.requires_grad() << std::endl;
         
         std::cout << "Logits shape: " << logits.shape().dims[0] << "x" << logits.shape().dims[1] << "x" << logits.shape().dims[2] << std::endl;
@@ -236,12 +249,17 @@ int main() {
         };
 
         check_grad("embed.weight", embed.weight);
-        check_grad("linear.weight", linear.weight);
-        if (linear.bias.is_valid()) check_grad("linear.bias", linear.bias);
+        // check_grad("linear.weight", linear.weight);
+        int ind = 0;
+        for(auto& params: model.parameters()){
+            check_grad("linear" + std::to_string(ind), params);
+            ind++;
+        }
+        // if (linear.bias.is_valid()) check_grad("linear.bias", linear.bias);
         
         // Test Optimizer
         std::vector<OwnTensor::Tensor> params = embed.parameters();
-        auto lin_params = linear.parameters();
+        auto lin_params = model.parameters();
         params.insert(params.end(), lin_params.begin(), lin_params.end());
         
         OwnTensor::nn::AdamW opt(params, 1e-3);
