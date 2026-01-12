@@ -128,14 +128,23 @@ namespace OwnTensor {
             size_t batch_coord = temp_batch % batch_dim_size;
             temp_batch /= batch_dim_size;
             
-            // Calculate offsets using the actual batch coordinates
-            if (dim < a_ndim - 2) {
-                a_batch_offset += batch_coord * a_strides[dim];
-            }
-            if (dim < b_ndim - 2) {
-                b_batch_offset += batch_coord * b_strides[dim];
-            }
             out_batch_offset += batch_coord * out_strides[dim];
+
+            // A Batch Offset
+            if (dim >= (int)out_ndim - 2 - ((int)a_ndim - 2)) {
+                size_t a_corres_dim = dim - (out_ndim - a_ndim);
+                size_t a_dim_size = a_shape[a_corres_dim];
+                size_t a_idx = (a_dim_size > 1) ? batch_coord : 0;
+                a_batch_offset += a_idx * a_strides[a_corres_dim];
+            }
+
+            // B Batch Offset
+            if (dim >= (int)out_ndim - 2 - ((int)b_ndim - 2)) {
+                size_t b_corres_dim = dim - (out_ndim - b_ndim);
+                size_t b_dim_size = b_shape[b_corres_dim];
+                size_t b_idx = (b_dim_size > 1) ? batch_coord : 0;
+                b_batch_offset += b_idx * b_strides[b_corres_dim];
+            }
         }
 
         float sum = 0.0f;
@@ -179,14 +188,23 @@ namespace OwnTensor {
         size_t batch_coord = temp_batch % batch_dim_size;
         temp_batch /= batch_dim_size;
         
-        // Calculate offsets using the actual batch coordinates
-        if (dim < a_ndim - 2) {
-            a_batch_offset += batch_coord * a_strides[dim];
-        }
-        if (dim < b_ndim - 2) {
-            b_batch_offset += batch_coord * b_strides[dim];
-        }
         out_batch_offset += batch_coord * out_strides[dim];
+
+        // A Batch Offset
+        if (dim >= (int)out_ndim - 2 - ((int)a_ndim - 2)) {
+            size_t a_corres_dim = dim - (out_ndim - a_ndim);
+            size_t a_dim_size = a_shape[a_corres_dim];
+            size_t a_idx = (a_dim_size > 1) ? batch_coord : 0;
+            a_batch_offset += a_idx * a_strides[a_corres_dim];
+        }
+
+        // B Batch Offset
+        if (dim >= (int)out_ndim - 2 - ((int)b_ndim - 2)) {
+            size_t b_corres_dim = dim - (out_ndim - b_ndim);
+            size_t b_dim_size = b_shape[b_corres_dim];
+            size_t b_idx = (b_dim_size > 1) ? batch_coord : 0;
+            b_batch_offset += b_idx * b_strides[b_corres_dim];
+        }
     }
 
         float sum = 0.0f;

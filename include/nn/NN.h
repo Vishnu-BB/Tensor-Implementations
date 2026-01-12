@@ -56,6 +56,16 @@ public:
     Tensor forward(const Tensor& input) override;
 };
 
+class Embedding : public Module {
+public:
+    Tensor weight;
+    int padding_idx;
+    
+    Embedding(int num_embeddings, int embedding_dim, int padding_idx = -1);
+    
+    Tensor forward(const Tensor& input) override;
+};
+
 // ============================================================================
 // Containers
 // ============================================================================

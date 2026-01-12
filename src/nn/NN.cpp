@@ -24,27 +24,6 @@ void Module::zero_grad() {
     }
 }
 
-void Module::to(DeviceIndex dev) {
-    for (auto& p : params_) {
-        if (p.is_valid() && p.device() != dev) {
-            // Create new tensor on target device with same properties
-            TensorOptions opts = TensorOptions()
-                .with_dtype(p.dtype())
-                .with_device(dev)
-                .with_req_grad(p.requires_grad());
-            
-            Tensor new_tensor(p.shape(), opts);
-            
-            // Copy data from old tensor to new tensor
-            size_t num_bytes = p.numel() * Tensor::dtype_size(p.dtype());
-            std::memcpy(new_tensor.data(), p.data(), num_bytes);
-            
-            // Replace the parameter
-            p = new_tensor;
-        }
-    }
-}
-
 Tensor Module::operator()(const Tensor& input) {
     return forward(input);
 }
@@ -94,6 +73,36 @@ Tensor Linear::forward(const Tensor& input) {
 
 Tensor ReLU::forward(const Tensor& input) {
     return autograd::relu(input);
+}
+
+// ============================================================================
+// Embedding
+// ============================================================================
+
+Embedding::Embedding(int num_embeddings, int embedding_dim, int padding_idx) 
+    : padding_idx(padding_idx) {
+    TensorOptions opts = TensorOptions().with_req_grad(true);
+    
+    // Normal distribution initialization (small normal)
+    weight = Tensor::randn<float>(Shape{{num_embeddings, embedding_dim}}, opts, 0.02f);
+    
+    // Zero out padding row if requested
+    if (padding_idx >= 0 && padding_idx < num_embeddings) {
+        // We lack a precise "row slice" setter that's easy, 
+        // but we can do a quick manual fill for CPU or just assume it's small for now.
+        // For now, let's just initialize it normally and let user zero it if they want, 
+        // or we can implement it if needed. 
+        // PyTorch zeros it.
+        float* w_ptr = weight.data<float>();
+        std::fill(w_ptr + (size_t)padding_idx * embedding_dim, 
+                  w_ptr + (size_t)(padding_idx + 1) * embedding_dim, 0.0f);
+    }
+    
+    register_parameter(weight);
+}
+
+Tensor Embedding::forward(const Tensor& input) {
+    return autograd::embedding(input, weight, padding_idx);
 }
 
 // ============================================================================

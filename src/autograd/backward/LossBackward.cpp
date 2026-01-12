@@ -28,7 +28,11 @@ std::vector<Tensor> MSELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+        if (grad_output.is_cuda()) {
+            grad_val = grad_output.to_cpu().data<float>()[0];
+        } else {
+            grad_val = *grad_output.data<float>();
+        }
     }
     
     Tensor grad_pred = diff * (scale * grad_val);
@@ -66,7 +70,11 @@ std::vector<Tensor> MAELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+        if (grad_output.is_cuda()) {
+            grad_val = grad_output.to_cpu().data<float>()[0];
+        } else {
+            grad_val = *grad_output.data<float>();
+        }
     }
     
     Tensor grad_pred = sign_diff * (scale * grad_val);
@@ -101,7 +109,11 @@ std::vector<Tensor> BCELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+        if (grad_output.is_cuda()) {
+            grad_val = grad_output.to_cpu().data<float>()[0];
+        } else {
+            grad_val = *grad_output.data<float>();
+        }
     }
     
     Tensor grad_pred = (term1 + term2) * (scale * grad_val);
@@ -132,7 +144,11 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+        if (grad_output.is_cuda()) {
+            grad_val = grad_output.to_cpu().data<float>()[0];
+        } else {
+            grad_val = *grad_output.data<float>();
+        }
     }
     
     grad_pred = grad_pred * (scale * grad_val);
