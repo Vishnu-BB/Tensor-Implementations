@@ -184,6 +184,8 @@ void Adam::zero_grad() {
     }
 }
 
+} // namespace nn
+
 float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
     // Compute global gradient norm
     float total_norm_sq = 0.0f;
@@ -258,6 +260,9 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
     
     return total_norm;
 }
+
+
+namespace nn {
 
 // *********************************************************************************************
 // ============================ AdamW Optimizer ================================================

@@ -124,7 +124,7 @@ Embedding::Embedding(int num_embeddings, int embedding_dim, int padding_idx)
 }
 
 Tensor Embedding::forward(const Tensor& input) {
-    return autograd::embedding(input, weight, padding_idx);
+    return autograd::embedding(weight, input);
 }
 
 std::vector<Tensor> Embedding::parameters() {
