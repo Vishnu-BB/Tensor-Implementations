@@ -4,6 +4,7 @@
 #include "autograd/Variable.h"
 #include "core/TensorImpl.h"
 #include "core/AutogradMeta.h"
+#include "ops/helpers/EmbeddingKernels.h"
 #include <stdexcept>
 
 namespace OwnTensor {
@@ -85,44 +86,31 @@ Tensor embedding(const Tensor& weight, const Tensor& indices) {
             throw std::runtime_error("embedding: indices must be Int32, Int64, or UInt16");
         }
     } else {
-        // CUDA: transfer to CPU, compute, transfer back
-        Tensor weight_cpu = weight.to_cpu();
-        Tensor indices_cpu = indices.to_cpu();
-        
-        Tensor output_cpu(output_shape, TensorOptions().with_dtype(weight.dtype()));
-        
-        const float* weight_data = weight_cpu.data<float>();
-        float* output_data = output_cpu.data<float>();
-        
-        if (indices_cpu.dtype() == Dtype::Int64) {
-            const int64_t* idx_data = indices_cpu.data<int64_t>();
-            for (int64_t i = 0; i < num_indices; ++i) {
-                int64_t token_id = idx_data[i];
-                if (token_id < 0 || token_id >= vocab_size) {
-                    throw std::runtime_error("embedding: index out of range");
-                }
-                const float* row = weight_data + token_id * embed_dim;
-                float* out_row = output_data + i * embed_dim;
-                for (int64_t c = 0; c < embed_dim; ++c) {
-                    out_row[c] = row[c];
-                }
+        // CUDA: Use optimized CUDA kernel
+        if (indices.dtype() == Dtype::UInt16) {
+            // Ensure indices are on same device as weight
+            Tensor indices_cuda = indices.device().is_cpu() ? indices.to(weight.device()) : indices;
+            
+            cuda::embedding_forward_cuda(
+                indices_cuda.data<uint16_t>(),
+                weight.data<float>(),
+                output.data<float>(),
+                num_indices, embed_dim, vocab_size, -1  // padding_idx = -1 (none)
+            );
+        } else {
+            // For other index types, convert to UInt16 on device
+            Tensor indices_u16 = indices.as_type(Dtype::UInt16);
+            if (indices_u16.device().is_cpu()) {
+                indices_u16 = indices_u16.to(weight.device());
             }
-        } else if (indices_cpu.dtype() == Dtype::UInt16) {
-            const uint16_t* idx_data = indices_cpu.data<uint16_t>();
-            for (int64_t i = 0; i < num_indices; ++i) {
-                int64_t token_id = static_cast<int64_t>(idx_data[i]);
-                if (token_id < 0 || token_id >= vocab_size) {
-                    throw std::runtime_error("embedding: index out of range");
-                }
-                const float* row = weight_data + token_id * embed_dim;
-                float* out_row = output_data + i * embed_dim;
-                for (int64_t c = 0; c < embed_dim; ++c) {
-                    out_row[c] = row[c];
-                }
-            }
+            
+            cuda::embedding_forward_cuda(
+                indices_u16.data<uint16_t>(),
+                weight.data<float>(),
+                output.data<float>(),
+                num_indices, embed_dim, vocab_size, -1
+            );
         }
-        
-        output = output_cpu.to(weight.device());
     }
     
     // Set up autograd if needed

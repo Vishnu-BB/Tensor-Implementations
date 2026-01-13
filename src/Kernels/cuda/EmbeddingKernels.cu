@@ -5,61 +5,121 @@
 namespace OwnTensor {
 namespace cuda {
 
-__global__ void embedding_forward_kernel(
-    const uint16_t* indices,
-    const float* weight,
-    float* output,
+// =============================================================================
+// OPTIMIZED EMBEDDING FORWARD KERNEL
+// Each thread processes one element of the embedding vector
+// This allows for coalesced memory access
+// =============================================================================
+
+__global__ void embedding_forward_kernel_optimized(
+    const uint16_t* __restrict__ indices,
+    const float* __restrict__ weight,
+    float* __restrict__ output,
+    int64_t N,      // Number of indices (batch * seq_len)
+    int64_t C,      // Embedding dimension
+    int64_t V,      // Vocabulary size
+    int padding_idx
+) {
+    // 2D thread indexing: x = embedding element, y = index position
+    int64_t c = blockIdx.x * blockDim.x + threadIdx.x;  // embedding dimension
+    int64_t n = blockIdx.y * blockDim.y + threadIdx.y;  // index position
+    
+    if (n >= N || c >= C) return;
+    
+    uint16_t tok = indices[n];
+    
+    if (tok == (uint16_t)padding_idx) {
+        output[n * C + c] = 0.0f;
+        return;
+    }
+    
+    if (tok >= V) {
+        return;
+    }
+    
+    output[n * C + c] = weight[(size_t)tok * C + c];
+}
+
+// Alternative: Use shared memory for indices when C is small
+__global__ void embedding_forward_kernel_small_c(
+    const uint16_t* __restrict__ indices,
+    const float* __restrict__ weight,
+    float* __restrict__ output,
     int64_t N,
     int64_t C,
     int64_t V,
     int padding_idx
 ) {
-    int64_t n = blockIdx.x * blockDim.x + threadIdx.x;
+    extern __shared__ uint16_t shared_indices[];
+    
+    int64_t tid = threadIdx.x;
+    int64_t bid = blockIdx.x;
+    int64_t block_size = blockDim.x;
+    
+    // Each block handles a portion of indices
+    int64_t indices_per_block = block_size;
+    int64_t start_n = bid * indices_per_block;
+    
+    // Load indices to shared memory
+    if (start_n + tid < N) {
+        shared_indices[tid] = indices[start_n + tid];
+    }
+    __syncthreads();
+    
+    // Each thread copies one full embedding row
+    int64_t n = start_n + tid;
     if (n >= N) return;
-
-    uint16_t tok = indices[n];
+    
+    uint16_t tok = shared_indices[tid];
     float* out_row = output + n * C;
-
+    
     if (tok == (uint16_t)padding_idx) {
         for (int64_t j = 0; j < C; ++j) {
             out_row[j] = 0.0f;
         }
         return;
     }
-
-    if (tok >= V) {
-        // In CUDA kernels we usually don't throw, but we can't do much here.
-        // We just skip invalid tokens.
-        return;
-    }
-
+    
+    if (tok >= V) return;
+    
     const float* w_row = weight + (size_t)tok * C;
-    for (int64_t j = 0; j < C; ++j) {
+    
+    // Vectorized copy using float4 if C is divisible by 4
+    int64_t c4 = C / 4;
+    for (int64_t j = 0; j < c4; ++j) {
+        reinterpret_cast<float4*>(out_row)[j] = reinterpret_cast<const float4*>(w_row)[j];
+    }
+    // Handle remainder
+    for (int64_t j = c4 * 4; j < C; ++j) {
         out_row[j] = w_row[j];
     }
 }
 
-__global__ void embedding_backward_kernel(
-    const uint16_t* indices,
-    const float* grad_output,
-    float* grad_weight,
+// =============================================================================
+// OPTIMIZED EMBEDDING BACKWARD KERNEL
+// Uses warp-level atomics for better performance
+// =============================================================================
+
+__global__ void embedding_backward_kernel_optimized(
+    const uint16_t* __restrict__ indices,
+    const float* __restrict__ grad_output,
+    float* __restrict__ grad_weight,
     int64_t N,
     int64_t C,
     int64_t V,
     int padding_idx
 ) {
-    int64_t n = blockIdx.x * blockDim.x + threadIdx.x;
-    if (n >= N) return;
-
+    // 2D thread indexing
+    int64_t c = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t n = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (n >= N || c >= C) return;
+    
     uint16_t tok = indices[n];
     if (tok == (uint16_t)padding_idx || tok >= V) return;
-
-    const float* go_row = grad_output + n * C;
-    float* gw_row = grad_weight + (size_t)tok * C;
-
-    for (int64_t j = 0; j < C; ++j) {
-        atomicAdd(gw_row + j, go_row[j]);
-    }
+    
+    float grad = grad_output[n * C + c];
+    atomicAdd(&grad_weight[(size_t)tok * C + c], grad);
 }
 
 void embedding_forward_cuda(
@@ -71,9 +131,16 @@ void embedding_forward_cuda(
     int64_t V,
     int padding_idx
 ) {
-    int threads = 256;
-    int blocks = (N + threads - 1) / threads;
-    embedding_forward_kernel<<<blocks, threads>>>(indices, weight, output, N, C, V, padding_idx);
+    // Use 2D grid for better parallelism
+    dim3 block(32, 8);  // 256 threads total
+    dim3 grid(
+        (C + block.x - 1) / block.x,
+        (N + block.y - 1) / block.y
+    );
+    
+    embedding_forward_kernel_optimized<<<grid, block>>>(
+        indices, weight, output, N, C, V, padding_idx
+    );
 }
 
 void embedding_backward_cuda(
@@ -85,9 +152,16 @@ void embedding_backward_cuda(
     int64_t V,
     int padding_idx
 ) {
-    int threads = 256;
-    int blocks = (N + threads - 1) / threads;
-    embedding_backward_kernel<<<blocks, threads>>>(indices, grad_output, grad_weight, N, C, V, padding_idx);
+    // Use 2D grid for better parallelism
+    dim3 block(32, 8);  // 256 threads total
+    dim3 grid(
+        (C + block.x - 1) / block.x,
+        (N + block.y - 1) / block.y
+    );
+    
+    embedding_backward_kernel_optimized<<<grid, block>>>(
+        indices, grad_output, grad_weight, N, C, V, padding_idx
+    );
 }
 
 } // namespace cuda

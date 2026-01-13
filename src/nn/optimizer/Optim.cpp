@@ -5,6 +5,7 @@
 #include "ops/UnaryOps/Reduction.h"
 #include <cmath>
 #include <iostream>
+#include "ops/helpers/AdamKernels.h"
 namespace OwnTensor {
 namespace nn {
 
@@ -138,37 +139,21 @@ void Adam::step() {
                 param_data[j] -= lr_ * m_hat / (std::sqrt(v_hat) + eps_);
             }
         } else {
-            // For CUDA: transfer to CPU, update, transfer back
-            Tensor param_cpu = param->to_cpu();
-            Tensor grad_cpu = grad.to_cpu();
-            Tensor m_cpu = m_[i].to_cpu();
-            Tensor v_cpu = v_[i].to_cpu();
-            
-            float* param_data = param_cpu.data<float>();
-            const float* grad_data = grad_cpu.data<float>();
-            float* m_data = m_cpu.data<float>();
-            float* v_data = v_cpu.data<float>();
-            
-            for (int64_t j = 0; j < numel; ++j) {
-                float g = grad_data[j];
-                
-                if (weight_decay_ > 0.0f) {
-                    g += weight_decay_ * param_data[j];
-                }
-                
-                m_data[j] = beta1_ * m_data[j] + (1.0f - beta1_) * g;
-                v_data[j] = beta2_ * v_data[j] + (1.0f - beta2_) * g * g;
-                
-                float m_hat = m_data[j] / bias_correction1;
-                float v_hat = v_data[j] / bias_correction2;
-                
-                param_data[j] -= lr_ * m_hat / (std::sqrt(v_hat) + eps_);
-            }
-            
-            // Copy back
-            param->copy_(param_cpu);
-            m_[i].copy_(m_cpu);
-            v_[i].copy_(v_cpu);
+            // CUDA: Use fused CUDA kernel for maximum performance
+            cuda::fused_adam_cuda(
+                param->data<float>(),
+                param->grad<float>(),
+                m_[i].data<float>(),
+                v_[i].data<float>(),
+                numel,
+                lr_,
+                beta1_,
+                beta2_,
+                eps_,
+                weight_decay_,
+                bias_correction1,
+                bias_correction2
+            );
         }
     }
 }
@@ -187,7 +172,7 @@ void Adam::zero_grad() {
 } // namespace nn
 
 float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
-    // Compute global gradient norm
+    // Compute global gradient norm using GPU tensor operations
     float total_norm_sq = 0.0f;
     
     for (auto* param : params) {
@@ -195,7 +180,7 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
             continue;
         }
         
-        // Try to get gradient - use try-catch since grad_view might throw
+        // Try to get gradient
         Tensor grad;
         try {
             grad = param->grad_view();
@@ -203,19 +188,13 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
             continue;  // No gradient for this parameter
         }
         
-        // Make sure gradient is contiguous before access
-        Tensor grad_cont = grad.is_contiguous() ? grad : grad.contiguous();
+        // Use GPU-native operations: sum of squares
+        Tensor grad_sq = OwnTensor::square(grad);
+        Tensor sum_sq = OwnTensor::reduce_sum(grad_sq, {}, false);  // Sum all elements
         
-        // Transfer to CPU for computation
-        Tensor grad_cpu = grad_cont.device().is_cpu() ? grad_cont : grad_cont.to_cpu();
-        const float* grad_data = grad_cpu.data<float>();
-        int64_t numel = grad_cpu.numel();
-        
-        float param_norm_sq = 0.0f;
-        for (int64_t i = 0; i < numel; ++i) {
-            param_norm_sq += grad_data[i] * grad_data[i];
-        }
-        total_norm_sq += param_norm_sq;
+        // Only transfer the single scalar result to CPU
+        Tensor sum_cpu = sum_sq.device().is_cpu() ? sum_sq : sum_sq.to_cpu();
+        total_norm_sq += sum_cpu.data<float>()[0];
     }
     
     float total_norm = std::sqrt(total_norm_sq);
@@ -237,24 +216,8 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
                 continue;
             }
             
-            // Scale gradient in-place
-            if (param->device().is_cpu()) {
-                float* grad_data = param->grad<float>();
-                int64_t numel = param->numel();
-                for (int64_t i = 0; i < numel; ++i) {
-                    grad_data[i] *= clip_coef;
-                }
-            } else {
-                // For CUDA: get grad view, scale on CPU, copy back
-                Tensor grad_cpu = grad.to_cpu();
-                float* grad_data = grad_cpu.data<float>();
-                int64_t numel = grad_cpu.numel();
-                for (int64_t i = 0; i < numel; ++i) {
-                    grad_data[i] *= clip_coef;
-                }
-                // Copy scaled gradient back in-place
-                grad.copy_(grad_cpu);
-            }
+            // Scale gradient in-place using GPU tensor operation
+            grad *= clip_coef;
         }
     }
     

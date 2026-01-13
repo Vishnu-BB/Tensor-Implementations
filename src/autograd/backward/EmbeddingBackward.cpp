@@ -2,6 +2,7 @@
 #include "core/TensorImpl.h"
 #include "core/AutogradMeta.h"
 #include "ops/TensorOps.h"
+#include "ops/helpers/EmbeddingKernels.h"
 #include <stdexcept>
 
 namespace OwnTensor {
@@ -92,44 +93,32 @@ std::vector<Tensor> EmbeddingBackward::apply(std::vector<Tensor>&& grads) {
             }
         }
     } else {
-        // For CUDA: transfer to CPU, compute, transfer back
-        Tensor grad_cpu = grad_output.to_cpu();
-        Tensor indices_cpu = indices.to_cpu();
+        // CUDA: Use optimized CUDA kernel with atomicAdd
+        int64_t N = indices.numel();
         
-        const float* grad_data = grad_cpu.data<float>();
-        Tensor grad_weight_cpu = Tensor::zeros(Shape{{vocab_size_, embed_dim_}}, 
-            TensorOptions().with_dtype(grad_output.dtype()));
-        float* weight_grad_data = grad_weight_cpu.data<float>();
-        
-        if (indices_cpu.dtype() == Dtype::Int64) {
-            const int64_t* idx_data = indices_cpu.data<int64_t>();
-            for (int64_t b = 0; b < B; ++b) {
-                for (int64_t t = 0; t < T; ++t) {
-                    int64_t token_id = idx_data[b * T + t];
-                    if (token_id >= 0 && token_id < vocab_size_) {
-                        for (int64_t c = 0; c < C; ++c) {
-                            weight_grad_data[token_id * C + c] += 
-                                grad_data[(b * T + t) * C + c];
-                        }
-                    }
-                }
-            }
-        } else if (indices_cpu.dtype() == Dtype::UInt16) {
-            const uint16_t* idx_data = indices_cpu.data<uint16_t>();
-            for (int64_t b = 0; b < B; ++b) {
-                for (int64_t t = 0; t < T; ++t) {
-                    int64_t token_id = static_cast<int64_t>(idx_data[b * T + t]);
-                    if (token_id >= 0 && token_id < vocab_size_) {
-                        for (int64_t c = 0; c < C; ++c) {
-                            weight_grad_data[token_id * C + c] += 
-                                grad_data[(b * T + t) * C + c];
-                        }
-                    }
-                }
-            }
+        // Ensure indices are on same device as grad_output
+        Tensor indices_cuda = indices;
+        if (indices.device().is_cpu()) {
+            indices_cuda = indices.to(grad_output.device());
         }
         
-        grad_weight = grad_weight_cpu.to(grad_output.device());
+        if (indices_cuda.dtype() == Dtype::UInt16) {
+            cuda::embedding_backward_cuda(
+                indices_cuda.data<uint16_t>(),
+                grad_output.data<float>(),
+                grad_weight.data<float>(),
+                N, C, vocab_size_, -1  // padding_idx = -1 (none)
+            );
+        } else {
+            // Convert to UInt16
+            Tensor indices_u16 = indices_cuda.as_type(Dtype::UInt16);
+            cuda::embedding_backward_cuda(
+                indices_u16.data<uint16_t>(),
+                grad_output.data<float>(),
+                grad_weight.data<float>(),
+                N, C, vocab_size_, -1
+            );
+        }
     }
     
     return {grad_weight};

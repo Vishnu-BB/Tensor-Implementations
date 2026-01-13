@@ -4,6 +4,7 @@
 #include "ops/helpers/ConditionalOps.h"
 #include "ops/UnaryOps/Trigonometry.h"
 #include "ops/UnaryOps/Reduction.h"
+#include "ops/helpers/ActivationKernels.h"
 #include <stdexcept>
 #include <cmath>
 
@@ -46,6 +47,23 @@ std::vector<Tensor> GeLUBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     const Tensor& x = saved_input_;
     
+    // Use fused CUDA kernel for GPU tensors (much faster)
+    if (x.device().is_cuda() && x.dtype() == Dtype::Float32) {
+        Tensor grad_input(x.shape(), TensorOptions()
+            .with_dtype(x.dtype())
+            .with_device(x.device()));
+        
+        cuda::fused_gelu_backward_cuda(
+            grad_output.data<float>(),
+            x.data<float>(),
+            grad_input.data<float>(),
+            x.numel()
+        );
+        
+        return {grad_input};
+    }
+    
+    // Fallback to tensor ops for CPU or non-float32
     // GeLU derivative:
     // gelu(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     // Let u = sqrt(2/pi) * (x + 0.044715 * x^3)

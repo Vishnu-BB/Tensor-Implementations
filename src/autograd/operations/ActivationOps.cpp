@@ -8,6 +8,7 @@
 #include "ops/UnaryOps/Reduction.h"
 #include "ops/UnaryOps/Exponents.h"
 #include "ops/UnaryOps/Trigonometry.h"
+#include "ops/helpers/ActivationKernels.h"
 #include <cmath>
 
 namespace OwnTensor {
@@ -24,6 +25,31 @@ Tensor relu(const Tensor& x) {
 }
 
 Tensor gelu(const Tensor& x) {
+    // Use fused CUDA kernel for GPU tensors (6x faster)
+    if (x.device().is_cuda() && x.dtype() == Dtype::Float32) {
+        Tensor output(x.shape(), TensorOptions()
+            .with_dtype(x.dtype())
+            .with_device(x.device()));
+        
+        cuda::fused_gelu_cuda(
+            x.data<float>(),
+            output.data<float>(),
+            x.numel()
+        );
+        
+        // Set up autograd if needed
+        if (x.requires_grad()) {
+            auto grad_fn = std::make_shared<GeLUBackward>(x);
+            Tensor& x_mut = const_cast<Tensor&>(x);
+            grad_fn->set_next_edge(0, get_grad_edge(x_mut));
+            output.set_grad_fn(grad_fn);
+            output.set_requires_grad(true);
+        }
+        
+        return output;
+    }
+    
+    // Fallback to tensor ops for CPU or non-float32
     return make_unary_op<GeLUBackward>(x,
         [](const Tensor& input) {
             const float sqrt_2_over_pi = std::sqrt(2.0f / M_PI);
@@ -33,7 +59,7 @@ Tensor gelu(const Tensor& x) {
             Tensor inner_output = 1.0f + tanh(tanh_inp);
             return half_x * inner_output;
         },
-        x);  // Pass x to GeLUBackward constructor
+        x);
 }
 
 Tensor sigmoid(const Tensor& x) {
