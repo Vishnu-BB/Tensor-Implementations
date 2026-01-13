@@ -17,3 +17,4 @@
 #include "autograd/operations/ReductionOps.h"
 #include "autograd/operations/ReshapeOps.h"
 #include "autograd/operations/LossOps.h"
+#include "autograd/operations/EmbeddingOps.h"

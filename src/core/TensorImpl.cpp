@@ -145,7 +145,14 @@ const Tensor& TensorImpl::grad() const {
 void TensorImpl::set_autograd_meta(std::unique_ptr<AutogradMetaInterface> autograd_meta) {
     autograd_meta_ = std::move(autograd_meta);
 }
-
+void TensorImpl::zero_grad() {
+    if (autograd_meta_ && autograd_meta_->has_grad()) {
+        // Zero out the gradient by getting mutable reference and filling with zeros
+        Tensor& grad_tensor = autograd_meta_->mutable_grad(this);
+        // Use fill method to zero the gradient
+        grad_tensor.fill<float>(0.0f);
+    }
+}
 // ============================================================================
 // Metadata Mutation
 // ============================================================================

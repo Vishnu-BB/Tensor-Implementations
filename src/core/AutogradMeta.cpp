@@ -91,6 +91,11 @@ const Tensor& AutogradMeta::grad() const {
 void AutogradMeta::set_grad(const Tensor& new_grad) {
     std::lock_guard<std::mutex> lock(mutex_);
     grad_ = std::make_unique<Tensor>(new_grad);
+    
+    // Trigger post-accumulation hook if it exists
+    if (post_acc_grad_hook_) {
+        (*post_acc_grad_hook_)(*grad_);
+    }
 }
 
 bool AutogradMeta::has_grad() const {

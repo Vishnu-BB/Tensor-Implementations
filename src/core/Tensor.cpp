@@ -611,6 +611,23 @@ Tensor Tensor::grad_view() const {
     return impl_->grad();
 }
 
+void Tensor::zero_grad() {
+    if (impl_) {
+        impl_->zero_grad();
+    }
+}
+
+void Tensor::set_grad(const Tensor& grad) {
+    if (!impl_) {
+        throw std::runtime_error("set_grad: tensor is not initialized");
+    }
+    if (!impl_->has_autograd_meta()) {
+        impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
+    }
+    auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
+    meta->set_grad(grad);
+}
+
 // ========================================================================
 // Autograd Methods (PyTorch-style)
 // ========================================================================

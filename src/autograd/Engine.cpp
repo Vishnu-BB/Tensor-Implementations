@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <queue>
 #include <stdexcept>
-
+#include<iostream>
 namespace OwnTensor {
 namespace autograd {
 
@@ -153,6 +153,29 @@ void backward(const Tensor& root, const Tensor* grad_output) {
             grad_map[next_fn.get()].push_back(input_grads[i]);
         }
     }
+        for (auto& [node_ptr, grads] : grad_map) {
+        if (grads.empty()) continue;
+        
+        // Check if already processed (was in nodes list)
+        bool was_processed = false;
+        for (const auto& node : nodes) {
+            if (node.get() == node_ptr) {
+                was_processed = true;
+                break;
+            }
+        }
+        
+        if (!was_processed) {
+            // Sum gradients
+            Tensor grad = grads[0];
+            for (size_t i = 1; i < grads.size(); ++i) {
+                grad = operator+(grad, grads[i]);
+            }
+            // Apply (this calls GradAccumulator::apply which sets grad_ in AutogradMeta)
+            node_ptr->apply({grad});
+        }
+    }
 }
+
 } // namespace autograd
 } // namespace OwnTensor

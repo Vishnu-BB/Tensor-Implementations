@@ -105,6 +105,9 @@ namespace OwnTensor
         TensorOptions opts() const{
             return TensorOptions().with_device(device()).with_dtype(dtype()).with_req_grad(requires_grad());    
         }
+        bool has_grad() const { return impl_->has_grad(); }
+        void zero_grad();
+        void set_grad(const Tensor& grad);
 
         // ######################################################
         // Data Accessors

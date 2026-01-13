@@ -58,13 +58,33 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
     // grad_a = grad_output @ b.T
     // grad_b = a.T @ grad_output
     Tensor b_t = saved_b_.t();
-    Tensor a_t = saved_a_.t();
     
     Tensor grad_a = matmul(grad_output, b_t);
-    Tensor grad_b = matmul(a_t, grad_output);
+    grad_a = reduce_to_shape(grad_a, saved_a_.shape());
     
-    return {reduce_to_shape(grad_a, saved_a_.shape()), 
-            reduce_to_shape(grad_b, saved_b_.shape())};
+    Tensor grad_b;
+    
+    // Optimization for Linear Layer case: [Batch, T, Hidden] @ [Hidden, Out]
+    // where we want to avoid materializing [Batch, Hidden, Out] before reduction
+    if (saved_b_.ndim() == 2 && saved_a_.ndim() > 2) {
+        int64_t hidden_dim = saved_a_.shape().dims.back();
+        int64_t output_dim = grad_output.shape().dims.back();
+        
+        // Reshape [B, T, Hidden] -> [B*T, Hidden]
+        Tensor a_flat = saved_a_.reshape(Shape{{-1, hidden_dim}});
+        // Reshape [B, T, C] -> [B*T, C]
+        Tensor g_flat = grad_output.reshape(Shape{{-1, output_dim}});
+        
+        // [Hidden, BT] @ [BT, C] -> [Hidden, C] (implicitly sums over B*T)
+        grad_b = matmul(a_flat.t(), g_flat);
+    } else {
+        // General case
+        Tensor a_t = saved_a_.t();
+        grad_b = matmul(a_t, grad_output);
+        grad_b = reduce_to_shape(grad_b, saved_b_.shape());
+    }
+    
+    return {grad_a, grad_b};
 }
 
 } // namespace autograd

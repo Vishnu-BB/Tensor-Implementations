@@ -213,7 +213,7 @@ int main() {
         // USE autograd::view to maintain the graph!
         OwnTensor::Tensor flattened_logits = OwnTensor::autograd::view(logits, OwnTensor::Shape{{B * T, V}});
 
-        OwnTensor::Tensor loss = OwnTensor::autograd::sparse_cross_entropy_with_logits(flattened_logits, flattened_targets);
+        OwnTensor::Tensor loss = OwnTensor::autograd::sparse_cross_entropy_loss(flattened_logits, flattened_targets);
         std::cout << "Loss requires_grad: " << loss.requires_grad() << std::endl;
         
         std::cout << "Loss: ";

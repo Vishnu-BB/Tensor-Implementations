@@ -1,13 +1,8 @@
 #include "autograd/backward/LossBackward.h"
-#include "autograd/operations/ActivationOps.h"
 #include "ops/TensorOps.h"
 #include "ops/ScalarOps.h"
 #include "ops/helpers/ConditionalOps.h"
-#include "ops/helpers/LossKernels.h"
-#include "device/DeviceCore.h"
 #include <stdexcept>
-#include <cmath>
-#include <iostream>
 
 namespace OwnTensor {
 namespace autograd {
@@ -33,11 +28,7 @@ std::vector<Tensor> MSELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
-        } else {
-            grad_val = *grad_output.data<float>();
-        }
+        grad_val = *grad_output.data<float>();
     }
     
     Tensor grad_pred = diff * (scale * grad_val);
@@ -75,11 +66,7 @@ std::vector<Tensor> MAELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
-        } else {
-            grad_val = *grad_output.data<float>();
-        }
+        grad_val = *grad_output.data<float>();
     }
     
     Tensor grad_pred = sign_diff * (scale * grad_val);
@@ -114,11 +101,7 @@ std::vector<Tensor> BCELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
-        } else {
-            grad_val = *grad_output.data<float>();
-        }
+        grad_val = *grad_output.data<float>();
     }
     
     Tensor grad_pred = (term1 + term2) * (scale * grad_val);
@@ -149,11 +132,7 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
     // Get scalar grad_output value
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
-        } else {
-            grad_val = *grad_output.data<float>();
-        }
+        grad_val = *grad_output.data<float>();
     }
     
     grad_pred = grad_pred * (scale * grad_val);
@@ -162,95 +141,133 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
 }
 
 // ============================================================================
-// SparseCrossEntropyBackward
+// SparseCrossEntropyLossBackward
 // ============================================================================
 
-SparseCrossEntropyBackward::SparseCrossEntropyBackward(const Tensor& logits, const Tensor& target, int64_t dim)
-    : Node(1), saved_logits_(logits), saved_target_(target), dim_(dim) {}
+SparseCrossEntropyLossBackward::SparseCrossEntropyLossBackward(
+    const Tensor& logits, const Tensor& targets, int64_t batch_size, int64_t num_classes)
+    : Node(1), saved_logits_(logits), saved_targets_(targets), 
+      batch_size_(batch_size), num_classes_(num_classes) {}
 
-std::vector<Tensor> SparseCrossEntropyBackward::apply(std::vector<Tensor>&& grads) {
+std::vector<Tensor> SparseCrossEntropyLossBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) {
-        throw std::runtime_error("SparseCrossEntropyBackward: no gradients provided");
+        throw std::runtime_error("SparseCrossEntropyLossBackward: no gradients provided");
     }
     
     const Tensor& grad_output = grads[0];
     
-    // grad_logits = (softmax(logits) - one_hot(target)) * grad_output
-    Tensor probs = softmax(saved_logits_, dim_);
-    
-    int64_t num_samples = saved_target_.numel();
-    float scale = 1.0f / static_cast<float>(num_samples);
-    
-    // Get scalar grad_output value
+    // Get scalar grad_output value - must transfer to CPU if on CUDA
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
-        } else {
-            grad_val = *grad_output.data<float>();
-        }
+        Tensor grad_cpu = grad_output.device().is_cpu() ? grad_output : grad_output.to_cpu();
+        grad_val = *grad_cpu.data<float>();
     }
     
-    scale *= grad_val;
+    // Handle both 2D [N, C] and 3D [B, T, C] logits
+    // We need to flatten to 2D for computation, then reshape back
+    auto logits_shape = saved_logits_.shape().dims;
+    Shape original_shape = saved_logits_.shape();
     
-    if (saved_target_.is_cpu()) {
-        Tensor probs = softmax(saved_logits_, dim_);
-        Tensor grad_logits = probs * scale;
+    Tensor logits_2d = saved_logits_;
+    if (logits_shape.size() == 3) {
+        // Flatten [B, T, C] -> [B*T, C]
+        logits_2d = saved_logits_.view(Shape{{batch_size_, num_classes_}});
+    }
+    
+    // Compute softmax and gradient on 2D tensor
+    TensorOptions opts = TensorOptions()
+        .with_dtype(saved_logits_.dtype())
+        .with_device(saved_logits_.device());
+    
+    Tensor grad_logits_2d = Tensor::zeros(logits_2d.shape(), opts);
+    
+    // CPU implementation
+    if (logits_2d.device().is_cpu()) {
+        const float* logits_data = logits_2d.data<float>();
+        float* grad_data = grad_logits_2d.data<float>();
         
-        dispatch_by_dtype(grad_logits.dtype(), [&](auto dummy) {
-            using T = decltype(dummy);
-            T* g_ptr = grad_logits.data<T>();
-            
-            dispatch_by_integer_dtype(saved_target_.dtype(), [&](auto dummy_idx) {
-                using T_idx = decltype(dummy_idx);
-                const T_idx* t_ptr = saved_target_.data<T_idx>();
-                
-                int64_t batch_size = saved_target_.numel();
-                int64_t vocab_size = saved_logits_.shape().dims.back();
-                
-                #pragma omp parallel for
-                for (int64_t i = 0; i < batch_size; ++i) {
-                    int64_t target_idx = static_cast<int64_t>(t_ptr[i]);
-                    if (target_idx >= 0 && target_idx < vocab_size) {
-                        g_ptr[i * vocab_size + target_idx] -= static_cast<T>(scale);
-                    }
-                }
-            });
-        });
-        return {grad_logits};
-    } else {
-#ifdef WITH_CUDA
-        Tensor grad_logits = Tensor::zeros(saved_logits_.shape(), 
-            TensorOptions().with_device(saved_logits_.device()).with_dtype(saved_logits_.dtype()));
-            
-        cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-        int64_t batch_size = saved_target_.numel();
-        int64_t vocab_size = saved_logits_.shape().dims.back();
-
-        dispatch_by_dtype(saved_logits_.dtype(), [&](auto dummy) {
-            using T = decltype(dummy);
-            if constexpr (std::is_floating_point_v<T> || std::is_same_v<T, float16_t> || std::is_same_v<T, bfloat16_t>) {
-                dispatch_by_integer_dtype(saved_target_.dtype(), [&](auto dummy_idx) {
-                    using T_idx = decltype(dummy_idx);
-                    cuda::sparse_cross_entropy_backward_cuda<T, T_idx>(
-                        saved_logits_.data<T>(),
-                        saved_target_.data<T_idx>(),
-                        grad_logits.data<T>(),
-                        batch_size,
-                        vocab_size,
-                        static_cast<T>(scale),
-                        stream
-                    );
-                });
-            } else {
-                throw std::runtime_error("SparseCrossEntropyBackward: unsupported logits type");
+        // Compute softmax and gradient for each sample
+        for (int64_t i = 0; i < batch_size_; ++i) {
+            // Find max for numerical stability
+            float max_val = logits_data[i * num_classes_];
+            for (int64_t c = 1; c < num_classes_; ++c) {
+                max_val = std::max(max_val, logits_data[i * num_classes_ + c]);
             }
-        });
-        return {grad_logits};
-#else
-        throw std::runtime_error("SparseCrossEntropyBackward: CUDA implementation not yet provided");
-#endif
+            
+            // Compute exp(x - max) and sum
+            float sum_exp = 0.0f;
+            std::vector<float> exp_vals(num_classes_);
+            for (int64_t c = 0; c < num_classes_; ++c) {
+                exp_vals[c] = std::exp(logits_data[i * num_classes_ + c] - max_val);
+                sum_exp += exp_vals[c];
+            }
+            
+            // Get target class
+            int64_t target_class = 0;
+            if (saved_targets_.dtype() == Dtype::Int64) {
+                target_class = saved_targets_.data<int64_t>()[i];
+            } else if (saved_targets_.dtype() == Dtype::Int32) {
+                target_class = static_cast<int64_t>(saved_targets_.data<int32_t>()[i]);
+            } else if (saved_targets_.dtype() == Dtype::UInt16) {
+                target_class = static_cast<int64_t>(saved_targets_.data<uint16_t>()[i]);
+            }
+            
+            // Gradient: softmax[i,c] - (c == target ? 1 : 0)
+            float scale = grad_val / static_cast<float>(batch_size_);
+            for (int64_t c = 0; c < num_classes_; ++c) {
+                float softmax_val = exp_vals[c] / sum_exp;
+                float one_hot = (c == target_class) ? 1.0f : 0.0f;
+                grad_data[i * num_classes_ + c] = (softmax_val - one_hot) * scale;
+            }
+        }
+    } else {
+        // CUDA: transfer to CPU, compute, transfer back
+        Tensor logits_cpu = logits_2d.to_cpu();
+        Tensor targets_cpu = saved_targets_.to_cpu();
+        Tensor grad_cpu = Tensor::zeros(logits_2d.shape(), 
+            TensorOptions().with_dtype(saved_logits_.dtype()));
+        
+        const float* logits_data = logits_cpu.data<float>();
+        float* grad_data = grad_cpu.data<float>();
+        
+        for (int64_t i = 0; i < batch_size_; ++i) {
+            float max_val = logits_data[i * num_classes_];
+            for (int64_t c = 1; c < num_classes_; ++c) {
+                max_val = std::max(max_val, logits_data[i * num_classes_ + c]);
+            }
+            
+            float sum_exp = 0.0f;
+            std::vector<float> exp_vals(num_classes_);
+            for (int64_t c = 0; c < num_classes_; ++c) {
+                exp_vals[c] = std::exp(logits_data[i * num_classes_ + c] - max_val);
+                sum_exp += exp_vals[c];
+            }
+            
+            int64_t target_class = 0;
+            if (targets_cpu.dtype() == Dtype::Int64) {
+                target_class = targets_cpu.data<int64_t>()[i];
+            } else if (targets_cpu.dtype() == Dtype::UInt16) {
+                target_class = static_cast<int64_t>(targets_cpu.data<uint16_t>()[i]);
+            }
+            
+            float scale = grad_val / static_cast<float>(batch_size_);
+            for (int64_t c = 0; c < num_classes_; ++c) {
+                float softmax_val = exp_vals[c] / sum_exp;
+                float one_hot = (c == target_class) ? 1.0f : 0.0f;
+                grad_data[i * num_classes_ + c] = (softmax_val - one_hot) * scale;
+            }
+        }
+        
+        grad_logits_2d = grad_cpu.to(saved_logits_.device());
     }
+    
+    // Reshape gradient back to original shape if needed
+    Tensor grad_logits = grad_logits_2d;
+    if (logits_shape.size() == 3) {
+        grad_logits = grad_logits_2d.view(original_shape);
+    }
+    
+    return {grad_logits};
 }
 
 } // namespace autograd

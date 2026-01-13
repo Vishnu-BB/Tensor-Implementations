@@ -1,25 +1,27 @@
 #pragma once
 
 #include "autograd/Node.h"
+#include "autograd/SavedVariable.h"
 #include "core/Tensor.h"
 
 namespace OwnTensor {
 namespace autograd {
 
 /**
- * @brief Backward function for embedding lookup.
+ * @brief Backward function for embedding lookup
  * 
- * Forward: out[i] = weight[indices[i]]
- * Backward: grad_weight[indices[i]] += grad_output[i]
+ * Forward: output[b,t,:] = weight[indices[b,t], :]
+ * Backward: Scatter-add grad_output into weight gradient by indices
  */
 class EmbeddingBackward : public Node {
 private:
-    Tensor saved_indices_;
-    int64_t num_embeddings_;
-    int padding_idx_;
+    SavedVariable saved_indices_;
+    int64_t vocab_size_;
+    int64_t embed_dim_;
     
 public:
-    EmbeddingBackward(const Tensor& indices, int64_t num_embeddings, int padding_idx = -1);
+    EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int64_t embed_dim);
+    EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int padding_idx);
     
     std::string name() const override { return "EmbeddingBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;

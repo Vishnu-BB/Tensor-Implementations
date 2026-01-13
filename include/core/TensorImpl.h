@@ -324,6 +324,18 @@ public:
     bool has_autograd_meta() const {
         return autograd_meta_ != nullptr;
     }
+        /**
+     * Check if gradient data exists
+     */
+    bool has_grad() const {
+        if (!has_autograd_meta()) return false;
+        return autograd_meta_->has_grad();
+    }
+    
+    /**
+     * Zero out the gradient
+     */
+    void zero_grad();
     
     // ========================================================================
     // Version Control
