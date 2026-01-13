@@ -86,10 +86,12 @@ public:
     const std::string& path() const { return path_; }
 
     void read_block(size_t start, size_t count, std::vector<uint16_t>& out) const {
-        if (start + count > tokens_) throw std::out_of_range("read_block out of range");
         out.resize(count);
         const uint16_t* p = reinterpret_cast<const uint16_t*>(data_);
-        for (size_t i = 0; i < count; ++i) out[i] = p[start + i];
+        for (size_t i = 0; i < count; ++i) {
+            // Wrap around the available tokens using modulo
+            out[i] = p[(start + i) % tokens_];
+        }
     }
 
 private:
@@ -163,9 +165,9 @@ private:
 
 int main() {
     try {
-        const int B = 16;
-        const int T = 16;
-        const int V = 16; // Vocabulary size
+        const int B = 8;
+        const int T = 1024;
+        const int V = 50304; // Vocabulary size
 
         DataLoaderLite loader(B, T, 0, 1, "train", "./dummy_data");
         Batch batch = loader.next_batch();
