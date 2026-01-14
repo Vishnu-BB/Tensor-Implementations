@@ -37,7 +37,9 @@ using namespace OwnTensor::autograd;
 bool test_node_hooks() {
     TEST_SECTION("Test 1: Node Hook Execution");
     
-    auto node = std::make_shared<AddBackward>();
+    Tensor dummy_a = Tensor::zeros(Shape{{2, 2}});
+    Tensor dummy_b = Tensor::zeros(Shape{{2, 2}});
+    auto node = std::make_shared<AddBackward>(dummy_a, dummy_b);
     
     // Track hook calls
     bool pre_hook_called = false;
@@ -100,7 +102,9 @@ bool test_graph_task() {
     TEST_PASS("GraphTask initialized with keep_graph=false");
     
     // Create some nodes
-    auto node1 = std::make_shared<AddBackward>();
+    Tensor dummy_a = Tensor::zeros(Shape{{2, 2}});
+    Tensor dummy_b = Tensor::zeros(Shape{{2, 2}});
+    auto node1 = std::make_shared<AddBackward>(dummy_a, dummy_b);
     auto node2 = std::make_shared<MulBackward>(
         Tensor::ones(Shape{{2}}, TensorOptions()),
         Tensor::ones(Shape{{2}}, TensorOptions())
@@ -242,7 +246,9 @@ bool test_regression() {
     TEST_PASS("Gradient tracking still works");
     
     // Verify node creation
-    auto node = std::make_shared<AddBackward>();
+    Tensor dummy_x = Tensor::zeros(Shape{{3, 3}}, opts);
+    Tensor dummy_y = Tensor::zeros(Shape{{3, 3}}, opts);
+    auto node = std::make_shared<AddBackward>(dummy_x, dummy_y);
     if (node->name() != "AddBackward") {
         TEST_FAIL("Node name incorrect");
     }

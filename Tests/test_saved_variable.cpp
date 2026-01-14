@@ -226,7 +226,8 @@ bool test_non_leaf_saving() {
     Tensor a = Tensor::ones(Shape{{2, 2}}, opts);
     
     // Create a grad_fn
-    auto grad_fn = std::make_shared<autograd::AddBackward>();
+    Tensor b = Tensor::ones(Shape{{2, 2}}, opts);
+    auto grad_fn = std::make_shared<autograd::AddBackward>(a, b);
     a.set_grad_fn(grad_fn);
     
     if (a.is_leaf()) {

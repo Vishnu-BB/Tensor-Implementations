@@ -61,7 +61,7 @@ int main() {
         Tensor b = Tensor::ones(Shape{{2, 2}}, TensorOptions());
         
         // Create an AddBackward node
-        auto add_backward = std::make_shared<autograd::AddBackward>();
+        auto add_backward = std::make_shared<autograd::AddBackward>(a, b);
         std::cout << "✓ AddBackward created\n";
         
         // Create a MulBackward node
@@ -85,7 +85,7 @@ int main() {
         Tensor grad_out = Tensor::ones(Shape{{2, 2}}, TensorOptions());
         
         // Test AddBackward
-        auto add_backward = std::make_shared<autograd::AddBackward>();
+        auto add_backward = std::make_shared<autograd::AddBackward>(a, b);
         std::vector<Tensor> add_grads = add_backward->apply({grad_out});
         if (add_grads.size() == 2) {
             std::cout << "✓ AddBackward returned 2 gradients\n";

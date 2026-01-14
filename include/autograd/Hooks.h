@@ -64,6 +64,9 @@ public:
     /**
      * @brief Execute the hook after gradient accumulation.
      * 
+     * For DDP, this is typically where gradient synchronization (all-reduce)
+     * is triggered, as the gradient for this parameter is now "ready".
+     * 
      * @param grad The accumulated gradient
      */
     virtual void operator()(const Tensor& grad) = 0;

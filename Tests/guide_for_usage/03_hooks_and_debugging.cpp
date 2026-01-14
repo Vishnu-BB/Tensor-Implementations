@@ -57,7 +57,9 @@ int main() {
     std::cout << "=== 2. Node Pre/Post Hooks ===\n\n";
     
     // Create a backward node directly for demonstration
-    auto add_node = std::make_shared<AddBackward>();
+    Tensor dummy_a = Tensor::zeros(Shape{{2, 2}}, opts);
+    Tensor dummy_b = Tensor::zeros(Shape{{2, 2}}, opts);
+    auto add_node = std::make_shared<AddBackward>(dummy_a, dummy_b);
     
     // Pre-hook: Called before apply(), can modify inputs
     add_node->register_pre_hook([](variable_list& inputs) {

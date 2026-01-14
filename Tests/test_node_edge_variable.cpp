@@ -74,7 +74,9 @@ bool test_edge_basics() {
     TEST_PASS("Default Edge is invalid (as expected)");
     
     // Test edge with function
-    auto node = std::make_shared<autograd::AddBackward>();
+    Tensor dummy_a = Tensor::zeros(Shape{{2, 2}});
+    Tensor dummy_b = Tensor::zeros(Shape{{2, 2}});
+    auto node = std::make_shared<autograd::AddBackward>(dummy_a, dummy_b);
     Edge valid_edge(node, 0);
     
     if (!valid_edge.is_valid()) {
@@ -139,7 +141,9 @@ bool test_node_structure() {
     TEST_SECTION("Test 2: Node Structure");
     
     // Create backward nodes
-    auto add_node = std::make_shared<autograd::AddBackward>();
+    Tensor dummy_x = Tensor::zeros(Shape{{2, 2}});
+    Tensor dummy_y = Tensor::zeros(Shape{{2, 2}});
+    auto add_node = std::make_shared<autograd::AddBackward>(dummy_x, dummy_y);
     auto mul_node = std::make_shared<autograd::MulBackward>(
         Tensor::ones(Shape{{2, 2}}, TensorOptions()),
         Tensor::ones(Shape{{2, 2}}, TensorOptions())
@@ -303,7 +307,9 @@ bool test_autograd_meta_gradient_storage() {
     TEST_PASS("set_requires_grad() works after construction");
     
     // Test set_grad_fn makes tensor non-leaf
-    auto grad_fn = std::make_shared<autograd::AddBackward>();
+    Tensor dummy_1 = Tensor::zeros(t1.shape());
+    Tensor dummy_2 = Tensor::zeros(t1.shape());
+    auto grad_fn = std::make_shared<autograd::AddBackward>(dummy_1, dummy_2);
     t1.set_grad_fn(grad_fn);
     
     if (t1.is_leaf()) {
@@ -572,7 +578,9 @@ bool test_impl_namespace_helpers() {
     
     // Test set_gradient_edge
     Tensor t3 = Tensor::ones(Shape{{2, 2}}, req_grad);
-    auto grad_fn = std::make_shared<autograd::AddBackward>();
+    Tensor dummy_3 = Tensor::zeros(Shape{{2, 2}});
+    Tensor dummy_4 = Tensor::zeros(Shape{{2, 2}});
+    auto grad_fn = std::make_shared<autograd::AddBackward>(dummy_3, dummy_4);
     impl::set_gradient_edge(t3, Edge(grad_fn, 0));
     
     if (t3.grad_fn() != grad_fn) {
@@ -601,7 +609,9 @@ bool test_sequence_numbers() {
     // Create many nodes and verify sequence numbers increase
     std::vector<uint64_t> seq_nums;
     for (int i = 0; i < 10; i++) {
-        auto node = std::make_shared<autograd::AddBackward>();
+        Tensor d1 = Tensor::zeros(Shape{{1}});
+        Tensor d2 = Tensor::zeros(Shape{{1}});
+        auto node = std::make_shared<autograd::AddBackward>(d1, d2);
         seq_nums.push_back(node->sequence_nr());
     }
     
@@ -645,7 +655,9 @@ bool test_factory_functions() {
     
     // Test make_variable
     Tensor data = Tensor::ones(Shape{{2, 2}}, TensorOptions());
-    auto grad_fn = std::make_shared<autograd::AddBackward>();
+    Tensor d1 = Tensor::zeros(Shape{{2, 2}});
+    Tensor d2 = Tensor::zeros(Shape{{2, 2}});
+    auto grad_fn = std::make_shared<autograd::AddBackward>(d1, d2);
     
     Tensor var = make_variable(data, Edge(grad_fn, 0));
     

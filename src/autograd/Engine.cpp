@@ -139,8 +139,8 @@ void backward(const Tensor& root, const Tensor* grad_output) {
             grad = operator+(grad, node_grads[i]);
         }
         
-        // Apply backward function
-        std::vector<Tensor> input_grads = node_ptr->apply({grad});
+        // Apply backward function (operator() handles hooks)
+        std::vector<Tensor> input_grads = (*node_ptr)({grad});
         
         // Distribute gradients to next edges
         const auto& edges = node_ptr->next_edges();
@@ -172,7 +172,8 @@ void backward(const Tensor& root, const Tensor* grad_output) {
                 grad = operator+(grad, grads[i]);
             }
             // Apply (this calls GradAccumulator::apply which sets grad_ in AutogradMeta)
-            node_ptr->apply({grad});
+            // operator() handles any node-level hooks registered on GradAccumulator
+            (*node_ptr)({grad});
         }
     }
 }

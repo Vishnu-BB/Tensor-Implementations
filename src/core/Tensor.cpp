@@ -735,7 +735,7 @@ void Tensor::register_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook
         impl_->set_autograd_meta(std::make_unique<AutogradMeta>());
     }
     auto* meta = static_cast<AutogradMeta*>(impl_->autograd_meta());
-    meta->set_post_acc_hook(std::move(hook));
+    meta->add_post_acc_hook(std::move(hook));
 }
 
 void Tensor::clear_hooks() {
