@@ -70,8 +70,9 @@ struct AutogradMeta : public AutogradMetaInterface {
     /// Pre-backward hooks (run before gradient computation)
     std::vector<std::unique_ptr<FunctionPreHook>> hooks_;
 
-    /// Post-accumulation hook (run after .grad update on leaves)
-    std::unique_ptr<PostAccumulateGradHook> post_acc_grad_hook_;
+    /// Post-accumulation hooks (run after .grad update on leaves)
+    /// Suitable for DDP synchronization as it fires after full accumulation.
+    std::vector<std::unique_ptr<PostAccumulateGradHook>> post_acc_grad_hooks_;
 
     // =================================================================
     // FLAGS & METADATA
@@ -231,7 +232,12 @@ struct AutogradMeta : public AutogradMetaInterface {
     /**
      * @brief Set post-accumulation hook.
      */
-    void set_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook);
+    void add_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook);
+
+    /**
+     * @brief Trigger all post-accumulation hooks.
+     */
+    void trigger_post_acc_hooks(const Tensor& grad);
 
     /**
      * @brief Clear all hooks.

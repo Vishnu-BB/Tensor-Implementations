@@ -337,6 +337,14 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         post_hooks_.push_back(std::move(hook));
     }
+
+    /**
+     * @brief Register a post-hook to be called after apply().
+     * This is a convenience wrapper for register_post_hook that matches PyTorch API.
+     */
+    void register_hook(std::function<void(const variable_list&, const variable_list&)> hook) {
+        register_post_hook(std::move(hook));
+    }
     
     /**
      * @brief Get number of pre-hooks.

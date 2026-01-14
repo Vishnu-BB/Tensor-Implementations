@@ -15,7 +15,7 @@ AutogradMeta::AutogradMeta(AutogradMeta&& other) noexcept
       grad_fn_(std::move(other.grad_fn_)),
       grad_accumulator_(std::move(other.grad_accumulator_)),
       hooks_(std::move(other.hooks_)),
-      post_acc_grad_hook_(std::move(other.post_acc_grad_hook_)),
+      post_acc_grad_hooks_(std::move(other.post_acc_grad_hooks_)),
       requires_grad_(other.requires_grad_),
       retains_grad_(other.retains_grad_),
       is_view_(other.is_view_),
@@ -34,7 +34,7 @@ AutogradMeta& AutogradMeta::operator=(AutogradMeta&& other) noexcept {
         grad_fn_ = std::move(other.grad_fn_);
         grad_accumulator_ = std::move(other.grad_accumulator_);
         hooks_ = std::move(other.hooks_);
-        post_acc_grad_hook_ = std::move(other.post_acc_grad_hook_);
+        post_acc_grad_hooks_ = std::move(other.post_acc_grad_hooks_);
         requires_grad_ = other.requires_grad_;
         retains_grad_ = other.retains_grad_;
         is_view_ = other.is_view_;
@@ -91,10 +91,12 @@ const Tensor& AutogradMeta::grad() const {
 void AutogradMeta::set_grad(const Tensor& new_grad) {
     std::lock_guard<std::mutex> lock(mutex_);
     grad_ = std::make_unique<Tensor>(new_grad);
-    
-    // Trigger post-accumulation hook if it exists
-    if (post_acc_grad_hook_) {
-        (*post_acc_grad_hook_)(*grad_);
+}
+
+void AutogradMeta::trigger_post_acc_hooks(const Tensor& grad) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& hook : post_acc_grad_hooks_) {
+        (*hook)(grad);
     }
 }
 
@@ -113,15 +115,15 @@ void AutogradMeta::add_hook(std::unique_ptr<FunctionPreHook> hook) {
     hooks_.push_back(std::move(hook));
 }
 
-void AutogradMeta::set_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook) {
+void AutogradMeta::add_post_acc_hook(std::unique_ptr<PostAccumulateGradHook> hook) {
     std::lock_guard<std::mutex> lock(mutex_);
-    post_acc_grad_hook_ = std::move(hook);
+    post_acc_grad_hooks_.push_back(std::move(hook));
 }
 
 void AutogradMeta::clear_hooks() {
     std::lock_guard<std::mutex> lock(mutex_);
     hooks_.clear();
-    post_acc_grad_hook_.reset();
+    post_acc_grad_hooks_.clear();
 }
 
 } // namespace OwnTensor

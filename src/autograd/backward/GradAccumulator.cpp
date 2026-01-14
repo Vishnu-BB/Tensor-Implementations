@@ -28,6 +28,11 @@ std::vector<Tensor> GradAccumulator::apply(std::vector<Tensor>&& grads) {
             // First gradient: just set it
             meta->set_grad(grad_output);
         }
+        
+        // Trigger post-accumulation hooks specifically after accumulation is done
+        // for this backward pass. Since Engine.cpp sums all gradients for GradAccumulator
+        // before calling apply, this is the final gradient for this pass.
+        meta->trigger_post_acc_hooks(meta->grad());
     }
     
     // No outputs (leaf node)
