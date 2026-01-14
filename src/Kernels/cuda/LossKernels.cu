@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <type_traits>
+#include <stdio.h>
 
 namespace OwnTensor {
 namespace cuda {
@@ -60,9 +61,25 @@ void sparse_cross_entropy_backward_cuda_impl(
     int threads = 256;
     int blocks = (batch_size + threads - 1) / threads;
 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    cudaEventRecord(start, stream);
+
     sparse_ce_backward_kernel_typed<T, T_idx><<<blocks, threads, 0, stream>>>(
         logits, targets, grad_logits, batch_size, vocab_size, scale
     );
+
+    cudaEventRecord(stop, stream);
+    cudaEventSynchronize(stop);
+    
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("KERNEL: sparse_cross_entropy_backward | time: %.3f ms\n", ms);
+    
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 }
 
 template<typename T, typename T_idx>

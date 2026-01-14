@@ -2,6 +2,8 @@
 #include "ops/TensorOps.h"
 #include "ops/ScalarOps.h"
 #include "ops/helpers/ConditionalOps.h"
+#include "ops/helpers/LossKernels.h"
+#include "device/DeviceCore.h"
 #include <stdexcept>
 
 namespace OwnTensor {
@@ -221,44 +223,48 @@ std::vector<Tensor> SparseCrossEntropyLossBackward::apply(std::vector<Tensor>&& 
             }
         }
     } else {
-        // CUDA: transfer to CPU, compute, transfer back
-        Tensor logits_cpu = logits_2d.to_cpu();
-        Tensor targets_cpu = saved_targets_.to_cpu();
-        Tensor grad_cpu = Tensor::zeros(logits_2d.shape(), 
-            TensorOptions().with_dtype(saved_logits_.dtype()));
+        // CUDA: native kernel for sparse cross entropy backward
+        // The kernel expects float logits and uint16 targets (most common case)
+        // Scale = grad_val / batch_size for mean reduction
+        float scale = grad_val / static_cast<float>(batch_size_);
         
-        const float* logits_data = logits_cpu.data<float>();
-        float* grad_data = grad_cpu.data<float>();
+        cudaStream_t stream = cuda::getCurrentStream();
         
-        for (int64_t i = 0; i < batch_size_; ++i) {
-            float max_val = logits_data[i * num_classes_];
-            for (int64_t c = 1; c < num_classes_; ++c) {
-                max_val = std::max(max_val, logits_data[i * num_classes_ + c]);
-            }
-            
-            float sum_exp = 0.0f;
-            std::vector<float> exp_vals(num_classes_);
-            for (int64_t c = 0; c < num_classes_; ++c) {
-                exp_vals[c] = std::exp(logits_data[i * num_classes_ + c] - max_val);
-                sum_exp += exp_vals[c];
-            }
-            
-            int64_t target_class = 0;
-            if (targets_cpu.dtype() == Dtype::Int64) {
-                target_class = targets_cpu.data<int64_t>()[i];
-            } else if (targets_cpu.dtype() == Dtype::UInt16) {
-                target_class = static_cast<int64_t>(targets_cpu.data<uint16_t>()[i]);
-            }
-            
-            float scale = grad_val / static_cast<float>(batch_size_);
-            for (int64_t c = 0; c < num_classes_; ++c) {
-                float softmax_val = exp_vals[c] / sum_exp;
-                float one_hot = (c == target_class) ? 1.0f : 0.0f;
-                grad_data[i * num_classes_ + c] = (softmax_val - one_hot) * scale;
-            }
+        // Call the CUDA kernel directly with float and uint16_t
+        // (the kernel template is instantiated for these types)
+        if (saved_logits_.dtype() == Dtype::Float32 && saved_targets_.dtype() == Dtype::UInt16) {
+            cuda::sparse_cross_entropy_backward_cuda<float, uint16_t>(
+                logits_2d.data<float>(),
+                saved_targets_.data<uint16_t>(),
+                grad_logits_2d.data<float>(),
+                batch_size_,
+                num_classes_,
+                scale,
+                stream
+            );
+        } else if (saved_logits_.dtype() == Dtype::Float32 && saved_targets_.dtype() == Dtype::Int64) {
+            cuda::sparse_cross_entropy_backward_cuda<float, int64_t>(
+                logits_2d.data<float>(),
+                saved_targets_.data<int64_t>(),
+                grad_logits_2d.data<float>(),
+                batch_size_,
+                num_classes_,
+                scale,
+                stream
+            );
+        } else if (saved_logits_.dtype() == Dtype::Float32 && saved_targets_.dtype() == Dtype::Int32) {
+            cuda::sparse_cross_entropy_backward_cuda<float, int32_t>(
+                logits_2d.data<float>(),
+                saved_targets_.data<int32_t>(),
+                grad_logits_2d.data<float>(),
+                batch_size_,
+                num_classes_,
+                scale,
+                stream
+            );
+        } else {
+            throw std::runtime_error("SparseCrossEntropyLossBackward: Unsupported dtype combination for CUDA");
         }
-        
-        grad_logits_2d = grad_cpu.to(saved_logits_.device());
     }
     
     // Reshape gradient back to original shape if needed

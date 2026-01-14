@@ -1,6 +1,7 @@
 #include "ops/helpers/EmbeddingKernels.h"
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <stdio.h>
 
 namespace OwnTensor {
 namespace cuda {
@@ -138,9 +139,25 @@ void embedding_forward_cuda(
         (N + block.y - 1) / block.y
     );
     
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    cudaEventRecord(start, 0);
+
     embedding_forward_kernel_optimized<<<grid, block>>>(
         indices, weight, output, N, C, V, padding_idx
     );
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("KERNEL: embedding_forward | time: %.3f ms\n", ms);
+    
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 }
 
 void embedding_backward_cuda(
@@ -159,9 +176,25 @@ void embedding_backward_cuda(
         (N + block.y - 1) / block.y
     );
     
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    
+    cudaEventRecord(start, 0);
+
     embedding_backward_kernel_optimized<<<grid, block>>>(
         indices, grad_output, grad_weight, N, C, V, padding_idx
     );
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    printf("KERNEL: embedding_backward | time: %.3f ms\n", ms);
+    
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 }
 
 } // namespace cuda
