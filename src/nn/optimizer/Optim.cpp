@@ -6,6 +6,8 @@
 #include <cmath>
 #include <iostream>
 #include "ops/helpers/AdamKernels.h"
+#include "ops/helpers/GradNormKernels.h"
+#include <cuda_runtime.h>
 namespace OwnTensor {
 namespace nn {
 
@@ -172,56 +174,120 @@ void Adam::zero_grad() {
 } // namespace nn
 
 float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
-    // Compute global gradient norm using GPU tensor operations
-    float total_norm_sq = 0.0f;
+    // FAST GPU-based gradient clipping using fused CUDA kernels
+    // - Single accumulator for all parameters
+    // - No tensor allocations in the loop
+    // - Vectorized scaling
     
+    bool is_cuda = false;
+    
+    // Check if any parameter is on CUDA
     for (auto* param : params) {
-        if (!param->requires_grad()) {
-            continue;
+        if (!param->requires_grad() || !param->has_grad()) continue;
+        if (param->device().is_cuda()) {
+            is_cuda = true;
+            break;
         }
-        
-        // Try to get gradient
-        Tensor grad;
-        try {
-            grad = param->grad_view();
-        } catch (...) {
-            continue;  // No gradient for this parameter
-        }
-        
-        // Use GPU-native operations: sum of squares
-        Tensor grad_sq = OwnTensor::square(grad);
-        Tensor sum_sq = OwnTensor::reduce_sum(grad_sq, {}, false);  // Sum all elements
-        
-        // Only transfer the single scalar result to CPU
-        Tensor sum_cpu = sum_sq.device().is_cpu() ? sum_sq : sum_sq.to_cpu();
-        total_norm_sq += sum_cpu.data<float>()[0];
     }
     
-    float total_norm = std::sqrt(total_norm_sq);
-    
-    // Clip if necessary
-    if (total_norm > max_norm) {
-        float clip_coef = max_norm / (total_norm + 1e-6f);
+    if (is_cuda) {
+        // GPU PATH: Use fused CUDA kernels
         
+        // Allocate single accumulator on GPU
+        float* d_norm_sq;
+        cudaMalloc(&d_norm_sq, sizeof(float));
+        cudaMemset(d_norm_sq, 0, sizeof(float));
+        
+        // Accumulate squared norms from all gradients
         for (auto* param : params) {
-            if (!param->requires_grad()) {
-                continue;
-            }
+            if (!param->requires_grad() || !param->has_grad()) continue;
             
-            // Try to get gradient
-            Tensor grad;
             try {
-                grad = param->grad_view();  
+                Tensor grad = param->grad_view();
+                if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
+                    cuda::grad_norm_squared_cuda(
+                        grad.data<float>(),
+                        d_norm_sq,
+                        grad.numel()
+                    );
+                }
             } catch (...) {
                 continue;
             }
-            
-            // Scale gradient in-place using GPU tensor operation
-            grad *= clip_coef;
         }
+        
+        // Copy result to CPU (single sync point)
+        float norm_sq;
+        cudaMemcpy(&norm_sq, d_norm_sq, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaFree(d_norm_sq);
+        
+        float total_norm = std::sqrt(norm_sq);
+        
+        // Scale if needed
+        if (total_norm > max_norm) {
+            float clip_coef = max_norm / (total_norm + 1e-6f);
+            
+            for (auto* param : params) {
+                if (!param->requires_grad() || !param->has_grad()) continue;
+                
+                try {
+                    Tensor grad = param->grad_view();
+                    if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
+                        cuda::scale_gradients_cuda(
+                            grad.data<float>(),
+                            clip_coef,
+                            grad.numel()
+                        );
+                    }
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
+        
+        return total_norm;
+    } else {
+        // CPU PATH: Simple loop
+        float total_norm_sq = 0.0f;
+        
+        for (auto* param : params) {
+            if (!param->requires_grad() || !param->has_grad()) continue;
+            
+            try {
+                Tensor grad = param->grad_view();
+                const float* data = grad.data<float>();
+                int64_t n = grad.numel();
+                for (int64_t i = 0; i < n; ++i) {
+                    total_norm_sq += data[i] * data[i];
+                }
+            } catch (...) {
+                continue;
+            }
+        }
+        
+        float total_norm = std::sqrt(total_norm_sq);
+        
+        if (total_norm > max_norm) {
+            float clip_coef = max_norm / (total_norm + 1e-6f);
+            
+            for (auto* param : params) {
+                if (!param->requires_grad() || !param->has_grad()) continue;
+                
+                try {
+                    Tensor grad = param->grad_view();
+                    float* data = grad.data<float>();
+                    int64_t n = grad.numel();
+                    for (int64_t i = 0; i < n; ++i) {
+                        data[i] *= clip_coef;
+                    }
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
+        
+        return total_norm;
     }
-    
-    return total_norm;
 }
 
 
