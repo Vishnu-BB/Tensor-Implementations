@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 // ============================================================================
 // OPTIMIZED MATRIX MULTIPLICATION - CUDA-L2 Inspired Implementation
 // ============================================================================
@@ -839,5 +832,3 @@ void cuda_matmul(const Tensor& A, const Tensor& B, Tensor& output, cudaStream_t 
 } // namespace OwnTensor
 
 #endif // WITH_CUDA
-
-
