@@ -2,7 +2,6 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cmath>
-#include <stdio.h>
 
 namespace OwnTensor {
 namespace cuda {
@@ -85,28 +84,12 @@ void fused_gelu_cuda(
     int blocks = std::min((numel + threads - 1) / threads, (int64_t)65535);
     
     // Use vectorized kernel for large tensors where alignment is likely good
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    cudaEventRecord(start, 0);
-
     if (numel >= 1024 && numel % 4 == 0) {
         int blocks4 = std::min((numel / 4 + threads - 1) / threads, (int64_t)65535);
         fused_gelu_kernel_vectorized<<<blocks4, threads>>>(input, output, numel);
     } else {
         fused_gelu_kernel<<<blocks, threads>>>(input, output, numel);
     }
-
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    
-    float ms = 0;
-    cudaEventElapsedTime(&ms, start, stop);
-    printf("KERNEL: fused_gelu | time: %.3f ms\n", ms);
-    
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
 }
 
 // =============================================================================
@@ -153,23 +136,7 @@ void fused_gelu_backward_cuda(
 ) {
     int threads = 256;
     int blocks = std::min((numel + threads - 1) / threads, (int64_t)65535);
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    cudaEventRecord(start, 0);
-
     fused_gelu_backward_kernel<<<blocks, threads>>>(grad_output, input, grad_input, numel);
-
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    
-    float ms = 0;
-    cudaEventElapsedTime(&ms, start, stop);
-    printf("KERNEL: fused_gelu_backward | time: %.3f ms\n", ms);
-    
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
 }
 
 // =============================================================================
@@ -209,23 +176,7 @@ void fused_bias_gelu_cuda(
     int threads = 256;
     int64_t total = batch_size * hidden_dim;
     int blocks = std::min((total + threads - 1) / threads, (int64_t)65535);
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    cudaEventRecord(start, 0);
-
     fused_bias_gelu_kernel<<<blocks, threads>>>(input, bias, output, batch_size, hidden_dim);
-
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    
-    float ms = 0;
-    cudaEventElapsedTime(&ms, start, stop);
-    printf("KERNEL: fused_bias_gelu | time: %.3f ms\n", ms);
-    
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
 }
 
 } // namespace cuda

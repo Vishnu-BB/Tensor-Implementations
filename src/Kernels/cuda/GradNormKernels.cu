@@ -27,10 +27,7 @@ __global__ void grad_norm_squared_kernel(
     float thread_sum = 0.0f;
     for (int64_t i = idx; i < numel; i += stride) {
         float val = grad[i];
-        // NaN-safe: treat NaN/Inf as 0 for norm computation
-        if (isfinite(val)) {
-            thread_sum += val * val;
-        }
+        thread_sum += val * val;
     }
     
     // Store in shared memory

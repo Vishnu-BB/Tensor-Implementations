@@ -223,37 +223,6 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
         
         float total_norm = std::sqrt(norm_sq);
         
-        // DEBUG: Find parameter with largest gradient
-        if (total_norm > 1000.0f) {
-            float max_param_norm = 0;
-            int max_param_idx = -1;
-            int param_idx = 0;
-            for (auto* param : params) {
-                if (!param->requires_grad() || !param->has_grad()) { param_idx++; continue; }
-                try {
-                    Tensor grad = param->grad_view();
-                    if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
-                        float* d_pnorm;
-                        cudaMalloc(&d_pnorm, sizeof(float));
-                        cudaMemset(d_pnorm, 0, sizeof(float));
-                        cuda::grad_norm_squared_cuda(grad.data<float>(), d_pnorm, grad.numel());
-                        float pnorm_sq;
-                        cudaMemcpy(&pnorm_sq, d_pnorm, sizeof(float), cudaMemcpyDeviceToHost);
-                        cudaFree(d_pnorm);
-                        float pnorm = std::sqrt(pnorm_sq);
-                        if (pnorm > max_param_norm) {
-                            max_param_norm = pnorm;
-                            max_param_idx = param_idx;
-                        }
-                    }
-                } catch (...) {}
-                param_idx++;
-            }
-            std::cerr << "[GRAD DEBUG] Total norm: " << total_norm 
-                      << " | Largest grad at param " << max_param_idx 
-                      << " with norm " << max_param_norm << std::endl;
-        }
-        
         // Scale if needed
         if (total_norm > max_norm) {
             float clip_coef = max_norm / (total_norm + 1e-6f);
