@@ -173,7 +173,7 @@ void Adam::zero_grad() {
 
 } // namespace nn
 
-float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
+float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_type, bool error_if_nonfinite) {
     // FAST GPU-based gradient clipping using fused CUDA kernels
     // - Single accumulator for all parameters
     // - No tensor allocations in the loop
@@ -189,25 +189,61 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
             break;
         }
     }
+
+    // Handle norm_type
+    bool is_inf_norm = std::isinf(norm_type);
     
     if (is_cuda) {
         // GPU PATH: Use fused CUDA kernels
         
         // Allocate single accumulator on GPU
-        float* d_norm_sq;
-        cudaMalloc(&d_norm_sq, sizeof(float));
-        cudaMemset(d_norm_sq, 0, sizeof(float));
+        float* d_norm;
+        cudaMalloc(&d_norm, sizeof(float));        // why is this even added??
+        cudaMemset(d_norm, 0, sizeof(float));        // why is this even added??
         
-        // Accumulate squared norms from all gradients
+        // Accumulate norms from all gradients
         for (auto* param : params) {
             if (!param->requires_grad() || !param->has_grad()) continue;
             
             try {
                 Tensor grad = param->grad_view();
                 if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
-                    cuda::grad_norm_squared_cuda(
+                    if (is_inf_norm) {
+                        cuda::grad_norm_inf_cuda(
+                            grad.data<float>(),
+                            d_norm,
+                            grad.numel()
+                        );
+                    } else {
+                        cuda::grad_norm_squared_cuda(
+                            grad.data<float>(),
+                            d_norm,
+                            grad.numel()
+                        );
+                    }
+                }
+            } catch (...) {
+                continue;
+            }
+        }
+        
+        // Allocate GPU memory for clip coefficient
+        float* d_clip_coef;
+        cudaMalloc(&d_clip_coef, sizeof(float));
+        
+        // Compute clip coefficient on GPU (also computes sqrt for L2 norm)
+        cuda::compute_clip_coef_cuda(d_norm, d_clip_coef, max_norm, is_inf_norm);
+        
+        // Scale all gradients using GPU-resident clip coefficient
+        for (auto* param : params) {
+            if (!param->requires_grad() || !param->has_grad()) continue;
+            
+            try {
+                Tensor grad = param->grad_view();
+                if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
+                    cuda::scale_gradients_with_gpu_coef_cuda(
                         grad.data<float>(),
-                        d_norm_sq,
+                        d_clip_coef,
                         grad.numel()
                     );
                 }
@@ -216,39 +252,22 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
             }
         }
         
-        // Copy result to CPU (single sync point)
-        float norm_sq;
-        cudaMemcpy(&norm_sq, d_norm_sq, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaFree(d_norm_sq);
+        // Only now copy the total_norm to CPU for return value
+        float total_norm;
+        cudaMemcpy(&total_norm, d_norm, sizeof(float), cudaMemcpyDeviceToHost);
         
-        float total_norm = std::sqrt(norm_sq);
-        
-        // Scale if needed
-        if (total_norm > max_norm) {
-            float clip_coef = max_norm / (total_norm + 1e-6f);
-            
-            for (auto* param : params) {
-                if (!param->requires_grad() || !param->has_grad()) continue;
-                
-                try {
-                    Tensor grad = param->grad_view();
-                    if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
-                        cuda::scale_gradients_cuda(
-                            grad.data<float>(),
-                            clip_coef,
-                            grad.numel()
-                        );
-                    }
-                } catch (...) {
-                    continue;
-                }
-            }
+        cudaFree(d_clip_coef);
+        cudaFree(d_norm);
+
+        if (error_if_nonfinite && (std::isnan(total_norm) || std::isinf(total_norm))) {
+             throw std::runtime_error("The total norm of gradients from `parameters` is non-finite, so it cannot be clipped. To disable this error and scale the gradients by the non-finite norm anyway, set `error_if_nonfinite=False`");
         }
         
         return total_norm;
     } else {
         // CPU PATH: Simple loop
         float total_norm_sq = 0.0f;
+        float total_norm_inf = 0.0f;
         
         for (auto* param : params) {
             if (!param->requires_grad() || !param->has_grad()) continue;
@@ -257,19 +276,35 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm) {
                 Tensor grad = param->grad_view();
                 const float* data = grad.data<float>();
                 int64_t n = grad.numel();
-                for (int64_t i = 0; i < n; ++i) {
-                    total_norm_sq += data[i] * data[i];
+                
+                if (is_inf_norm) {
+                    for (int64_t i = 0; i < n; ++i) {
+                        float val = std::abs(data[i]);
+                        if (val > total_norm_inf) total_norm_inf = val;
+                    }
+                } else {
+                    for (int64_t i = 0; i < n; ++i) {
+                        total_norm_sq += data[i] * data[i];
+                    }
                 }
             } catch (...) {
                 continue;
             }
         }
         
-        float total_norm = std::sqrt(total_norm_sq);
+        float total_norm;
+        if (is_inf_norm) {
+            total_norm = total_norm_inf;
+        } else {
+            total_norm = std::sqrt(total_norm_sq);
+        }
+
+        if (error_if_nonfinite && (std::isnan(total_norm) || std::isinf(total_norm))) {
+             throw std::runtime_error("The total norm of gradients from `parameters` is non-finite, so it cannot be clipped. To disable this error and scale the gradients by the non-finite norm anyway, set `error_if_nonfinite=False`");
+        }
         
-        if (total_norm > max_norm) {
-            float clip_coef = max_norm / (total_norm + 1e-6f);
-            
+        float clip_coef = max_norm / (total_norm + 1e-6f);
+        if (clip_coef < 1.0f) {
             for (auto* param : params) {
                 if (!param->requires_grad() || !param->has_grad()) continue;
                 

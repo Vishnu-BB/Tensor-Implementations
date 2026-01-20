@@ -3,8 +3,11 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
-#include <vector>
+#include <mma.h>
 #include <algorithm>
+#include <stdexcept>
+#include <vector>
+#include <string>
 
 #include "ops/Matmul.cuh"
 #include "core/Tensor.h"
@@ -12,353 +15,297 @@
 
 namespace OwnTensor {
 
-// =============================================================================
-// OPTIMIZED TILED MATMUL KERNEL
-// Uses shared memory tiling for 10-20x speedup over naive implementation
-// =============================================================================
+using namespace nvcuda;
 
-#define TILE_SIZE 32  // 32x32 tiles for good occupancy on most GPUs
+// ============================================================================
+// METADATA & CONSTANTS
+// ============================================================================
 
-// Tiled matmul for contiguous 2D matrices: C[M,N] = A[M,K] @ B[K,N]
-template <typename T>
-__global__ void tiled_matmul_2d_kernel(
-    const T* __restrict__ A,
-    const T* __restrict__ B,
-    T* __restrict__ C,
-    int M, int N, int K
-) {
-    // Shared memory for tiles
-    __shared__ T As[TILE_SIZE][TILE_SIZE];
-    __shared__ T Bs[TILE_SIZE][TILE_SIZE];
-    
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int row = blockIdx.y * TILE_SIZE + ty;
-    int col = blockIdx.x * TILE_SIZE + tx;
-    
-    T sum = T(0);
-    
-    // Loop over tiles
-    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
-    for (int t = 0; t < numTiles; t++) {
-        // Load tile from A into shared memory
-        int aCol = t * TILE_SIZE + tx;
-        if (row < M && aCol < K) {
-            As[ty][tx] = A[row * K + aCol];
-        } else {
-            As[ty][tx] = T(0);
-        }
-        
-        // Load tile from B into shared memory
-        int bRow = t * TILE_SIZE + ty;
-        if (bRow < K && col < N) {
-            Bs[ty][tx] = B[bRow * N + col];
-        } else {
-            Bs[ty][tx] = T(0);
-        }
-        
-        __syncthreads();
-        
-        // Compute partial dot product for this tile
-        #pragma unroll
-        for (int k = 0; k < TILE_SIZE; k++) {
-            sum += As[ty][k] * Bs[k][tx];
-        }
-        
-        __syncthreads();
-    }
-    
-    // Write result
-    if (row < M && col < N) {
-        C[row * N + col] = sum;
-    }
+struct MatmulMetadata {
+   int a_shape[8], b_shape[8], out_shape[8];
+   int a_strides[8], b_strides[8], out_strides[8];
+   int a_ndim, b_ndim, out_ndim;
+};
+
+__device__ void compute_batch_offset(int batch_idx, const int* shape, const int* strides, int ndim, const int* out_shape, int out_ndim, int& offset) {
+   offset = 0; if (out_ndim <= 2) return;
+   int temp_batch = batch_idx;
+   for (int dim = out_ndim - 3; dim >= 0; --dim) {
+      int b_dim_sz = out_shape[dim], b_coord = temp_batch % b_dim_sz;
+      temp_batch /= b_dim_sz;
+      int c_dim = dim - (out_ndim - ndim);
+      if (c_dim >= 0 && c_dim < ndim - 2) offset += (int64_t)((shape[c_dim] > 1) ? b_coord : 0) * strides[c_dim];
+   }
 }
 
-// Batched version for 3D tensors: C[B,M,N] = A[B,M,K] @ B[B,K,N]
-// Also handles broadcasting where batch dim is 1
-template <typename T>
-__global__ void tiled_batched_matmul_kernel(
-    const T* __restrict__ A,
-    const T* __restrict__ B,
-    T* __restrict__ C,
-    int batch_size,
-    int M, int N, int K,
-    int a_batch_stride,  // 0 if A is broadcast
-    int b_batch_stride,  // 0 if B is broadcast
-    int c_batch_stride
-) {
-    __shared__ T As[TILE_SIZE][TILE_SIZE];
-    __shared__ T Bs[TILE_SIZE][TILE_SIZE];
-    
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int batch = blockIdx.z;
-    int row = blockIdx.y * TILE_SIZE + ty;
-    int col = blockIdx.x * TILE_SIZE + tx;
-    
-    if (batch >= batch_size) return;
-    
-    // Calculate base pointers for this batch
-    const T* A_batch = A + batch * a_batch_stride;
-    const T* B_batch = B + batch * b_batch_stride;
-    T* C_batch = C + batch * c_batch_stride;
-    
-    T sum = T(0);
-    
-    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
-    for (int t = 0; t < numTiles; t++) {
-        int aCol = t * TILE_SIZE + tx;
-        if (row < M && aCol < K) {
-            As[ty][tx] = A_batch[row * K + aCol];
-        } else {
-            As[ty][tx] = T(0);
-        }
-        
-        int bRow = t * TILE_SIZE + ty;
-        if (bRow < K && col < N) {
-            Bs[ty][tx] = B_batch[bRow * N + col];
-        } else {
-            Bs[ty][tx] = T(0);
-        }
-        
-        __syncthreads();
-        
-        #pragma unroll
-        for (int k = 0; k < TILE_SIZE; k++) {
-            sum += As[ty][k] * Bs[k][tx];
-        }
-        
-        __syncthreads();
-    }
-    
-    if (row < M && col < N) {
-        C_batch[row * N + col] = sum;
-    }
+constexpr int PAD = 8;
+
+// ============================================================================
+// FP16 WMMA KERNEL (17 TFLOPS Version)
+// BM=128, BN=128, BK=32, Threads=512
+// ============================================================================
+
+template<int BM, int BN, int BK, int WM, int WN>
+__global__ void matmul_fp16_optimized(const __half* __restrict__ A, const __half* __restrict__ B, __half* __restrict__ C, int M, int N, int K, int total_batches, MatmulMetadata meta) {
+   const int batch_idx = blockIdx.z; if (batch_idx >= total_batches) return;
+   const int tid = threadIdx.x, warp_id = tid / 32, warp_row = warp_id / 4, warp_col = warp_id % 4;
+   int ao, bo, co;
+   compute_batch_offset(batch_idx, meta.a_shape, meta.a_strides, meta.a_ndim, meta.out_shape, meta.out_ndim, ao);
+   compute_batch_offset(batch_idx, meta.b_shape, meta.b_strides, meta.b_ndim, meta.out_shape, meta.out_ndim, bo);
+   compute_batch_offset(batch_idx, meta.out_shape, meta.out_strides, meta.out_ndim, meta.out_shape, meta.out_ndim, co);
+   const __half *Ap = A + ao, *Bp = B + bo; __half *Cp = C + co;
+   int s_am = meta.a_strides[meta.a_ndim-2], s_ak = meta.a_strides[meta.a_ndim-1];
+   int s_bk = meta.b_strides[meta.b_ndim-2], s_bn = meta.b_strides[meta.b_ndim-1];
+   int s_cm = meta.out_strides[meta.out_ndim-2], s_cn = meta.out_strides[meta.out_ndim-1];
+
+   __shared__ __half As[2][BM][BK + PAD], Bs[2][BK][BN + PAD];
+   wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> af;
+   wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> bf;
+   wmma::fragment<wmma::accumulator, 16, 16, 16, __half> acc[2][2];
+   #pragma unroll
+   for(int i=0; i<2; i++) for(int j=0; j<2; j++) wmma::fill_fragment(acc[i][j], __float2half(0.0f));
+
+   auto load_tiles = [&](int ko, int idx) {
+      for (int i = tid; i < BM * BK; i += 512) {
+         int r = i / BK, c = i % BK;
+         As[idx][r][c] = (blockIdx.y*BM+r < M && ko+c < K) ? Ap[(blockIdx.y*BM+r)*s_am + (ko+c)*s_ak] : __float2half(0.0f);
+      }
+      for (int i = tid; i < BK * BN; i += 512) {
+         int r = i / BN, c = i % BN;
+         Bs[idx][r][c] = (ko+r < K && blockIdx.x*BN+c < N) ? Bp[(ko+r)*s_bk + (blockIdx.x*BN+c)*s_bn] : __float2half(0.0f);
+      }
+   };
+   int wi = 0; load_tiles(0, wi); __syncthreads();
+   for (int k = 0; k < K; k += BK) {
+      int ri = wi; wi = 1 - wi;
+      if (k + BK < K) load_tiles(k + BK, wi);
+      #pragma unroll
+      for (int ks = 0; ks < BK; ks += 16) {
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            wmma::load_matrix_sync(af, &As[ri][warp_row*WM + i*16][ks], BK+PAD);
+            #pragma unroll
+            for (int j = 0; j < 2; j++) {
+               wmma::load_matrix_sync(bf, &Bs[ri][ks][warp_col*WN + j*16], BN+PAD);
+               wmma::mma_sync(acc[i][j], af, bf, acc[i][j]);
+            }
+         }
+      }
+      __syncthreads();
+   }
+   __half* sm = reinterpret_cast<__half*>(As);
+   #pragma unroll
+   for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++) {
+      int cr = blockIdx.y*BM + warp_row*WM + i*16, cc = blockIdx.x*BN + warp_col*WN + j*16;
+      if (cr < M && cc < N) {
+         __half* wsm = sm + warp_id * 256;
+         wmma::store_matrix_sync(wsm, acc[i][j], 16, wmma::mem_row_major);
+         for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++)
+            if (cr+r < M && cc+c < N) Cp[(cr+r)*s_cm + (cc+c)*s_cn] = wsm[r*16+c];
+      }
+   }
 }
 
-// Specialization for bfloat16 with FP32 accumulation
-__global__ void tiled_matmul_bf16_kernel(
-    const __nv_bfloat16* __restrict__ A,
-    const __nv_bfloat16* __restrict__ B,
-    __nv_bfloat16* __restrict__ C,
-    int M, int N, int K
-) {
-    __shared__ __nv_bfloat16 As[TILE_SIZE][TILE_SIZE];
-    __shared__ __nv_bfloat16 Bs[TILE_SIZE][TILE_SIZE];
-    
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int row = blockIdx.y * TILE_SIZE + ty;
-    int col = blockIdx.x * TILE_SIZE + tx;
-    
-    float sum = 0.0f;  // Accumulate in FP32 for precision
-    
-    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
-    for (int t = 0; t < numTiles; t++) {
-        int aCol = t * TILE_SIZE + tx;
-        if (row < M && aCol < K) {
-            As[ty][tx] = A[row * K + aCol];
-        } else {
-            As[ty][tx] = __float2bfloat16(0.0f);
-        }
-        
-        int bRow = t * TILE_SIZE + ty;
-        if (bRow < K && col < N) {
-            Bs[ty][tx] = B[bRow * N + col];
-        } else {
-            Bs[ty][tx] = __float2bfloat16(0.0f);
-        }
-        
-        __syncthreads();
-        
-        #pragma unroll
-        for (int k = 0; k < TILE_SIZE; k++) {
-            sum += __bfloat162float(As[ty][k]) * __bfloat162float(Bs[k][tx]);
-        }
-        
-        __syncthreads();
-    }
-    
-    if (row < M && col < N) {
-        C[row * N + col] = __float2bfloat16(sum);
-    }
+// ============================================================================
+// BF16 WMMA KERNEL
+// ============================================================================
+
+template<int BM, int BN, int BK, int WM, int WN>
+__global__ void matmul_bf16_optimized(const __nv_bfloat16* __restrict__ A, const __nv_bfloat16* __restrict__ B, __nv_bfloat16* __restrict__ C, int M, int N, int K, int total_batches, MatmulMetadata meta) {
+   const int batch_idx = blockIdx.z; if (batch_idx >= total_batches) return;
+   const int tid = threadIdx.x, warp_id = tid / 32, warp_row = warp_id / 4, warp_col = warp_id % 4;
+   int ao, bo, co;
+   compute_batch_offset(batch_idx, meta.a_shape, meta.a_strides, meta.a_ndim, meta.out_shape, meta.out_ndim, ao);
+   compute_batch_offset(batch_idx, meta.b_shape, meta.b_strides, meta.b_ndim, meta.out_shape, meta.out_ndim, bo);
+   compute_batch_offset(batch_idx, meta.out_shape, meta.out_strides, meta.out_ndim, meta.out_shape, meta.out_ndim, co);
+   const __nv_bfloat16 *Ap = A + ao, *Bp = B + bo; __nv_bfloat16 *Cp = C + co;
+   int s_am = meta.a_strides[meta.a_ndim-2], s_ak = meta.a_strides[meta.a_ndim-1];
+   int s_bk = meta.b_strides[meta.b_ndim-2], s_bn = meta.b_strides[meta.b_ndim-1];
+   int s_cm = meta.out_strides[meta.out_ndim-2], s_cn = meta.out_strides[meta.out_ndim-1];
+
+   __shared__ __nv_bfloat16 As[2][BM][BK + PAD], Bs[2][BK][BN + PAD];
+   wmma::fragment<wmma::matrix_a, 16, 16, 16, __nv_bfloat16, wmma::row_major> af;
+   wmma::fragment<wmma::matrix_b, 16, 16, 16, __nv_bfloat16, wmma::row_major> bf;
+   wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc[2][2];
+   #pragma unroll
+   for(int i=0; i<2; i++) for(int j=0; j<2; j++) wmma::fill_fragment(acc[i][j], 0.0f);
+
+   auto load_tiles = [&](int ko, int idx) {
+      for (int i = tid; i < BM * BK; i += 512) {
+         int r = i / BK, c = i % BK;
+         As[idx][r][c] = (blockIdx.y*BM+r < M && ko+c < K) ? Ap[(blockIdx.y*BM+r)*s_am + (ko+c)*s_ak] : __float2bfloat16(0.0f);
+      }
+      for (int i = tid; i < BK * BN; i += 512) {
+         int r = i / BN, c = i % BN;
+         Bs[idx][r][c] = (ko+r < K && blockIdx.x*BN+c < N) ? Bp[(ko+r)*s_bk + (blockIdx.x*BN+c)*s_bn] : __float2bfloat16(0.0f);
+      }
+   };
+   int wi = 0; load_tiles(0, wi); __syncthreads();
+   for (int k = 0; k < K; k += BK) {
+      int ri = wi; wi = 1 - wi;
+      if (k + BK < K) load_tiles(k + BK, wi);
+      #pragma unroll
+      for (int ks = 0; ks < BK; ks += 16) {
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            wmma::load_matrix_sync(af, &As[ri][warp_row*WM + i*16][ks], BK+PAD);
+            #pragma unroll
+            for (int j = 0; j < 2; j++) {
+               wmma::load_matrix_sync(bf, &Bs[ri][ks][warp_col*WN + j*16], BN+PAD);
+               wmma::mma_sync(acc[i][j], af, bf, acc[i][j]);
+            }
+         }
+      }
+      __syncthreads();
+   }
+   float* sm = reinterpret_cast<float*>(As);
+   #pragma unroll
+   for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++) {
+      int cr = blockIdx.y*BM + warp_row*WM + i*16, cc = blockIdx.x*BN + warp_col*WN + j*16;
+      if (cr < M && cc < N) {
+         float* wsm = sm + warp_id * 256;
+         wmma::store_matrix_sync(wsm, acc[i][j], 16, wmma::mem_row_major);
+         for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++)
+            if (cr+r < M && cc+c < N) Cp[(cr+r)*s_cm + (cc+c)*s_cn] = __float2bfloat16(wsm[r*16+c]);
+      }
+   }
 }
 
-// Specialization for half (FP16) with FP32 accumulation
-__global__ void tiled_matmul_fp16_kernel(
-    const __half* __restrict__ A,
-    const __half* __restrict__ B,
-    __half* __restrict__ C,
-    int M, int N, int K
-) {
-    __shared__ __half As[TILE_SIZE][TILE_SIZE];
-    __shared__ __half Bs[TILE_SIZE][TILE_SIZE];
-    
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int row = blockIdx.y * TILE_SIZE + ty;
-    int col = blockIdx.x * TILE_SIZE + tx;
-    
-    float sum = 0.0f;
-    
-    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
-    for (int t = 0; t < numTiles; t++) {
-        int aCol = t * TILE_SIZE + tx;
-        if (row < M && aCol < K) {
-            As[ty][tx] = A[row * K + aCol];
-        } else {
-            As[ty][tx] = __float2half(0.0f);
-        }
-        
-        int bRow = t * TILE_SIZE + ty;
-        if (bRow < K && col < N) {
-            Bs[ty][tx] = B[bRow * N + col];
-        } else {
-            Bs[ty][tx] = __float2half(0.0f);
-        }
-        
-        __syncthreads();
-        
-        #pragma unroll
-        for (int k = 0; k < TILE_SIZE; k++) {
-            sum += __half2float(As[ty][k]) * __half2float(Bs[k][tx]);
-        }
-        
-        __syncthreads();
-    }
-    
-    if (row < M && col < N) {
-        C[row * N + col] = __float2half(sum);
-    }
+// ============================================================================
+// FP32 KERNEL (5 TFLOPS Version)
+// BM=128, BN=128, BK=16, TM=4, TN=4, Threads=1024
+// ============================================================================
+
+template<int BM, int BN, int BK, int TM, int TN>
+__global__ void matmul_fp32_optimized(const float* __restrict__ A, const float* __restrict__ B, float* __restrict__ C, int M, int N, int K, int total_batches, MatmulMetadata meta) {
+   const int bx = blockIdx.x, by = blockIdx.y, b_idx = blockIdx.z;
+   if (b_idx >= total_batches) return;
+   const int tid = threadIdx.x, tCol = tid % 32, tRow = tid / 32;
+   int ao, bo, co;
+   compute_batch_offset(b_idx, meta.a_shape, meta.a_strides, meta.a_ndim, meta.out_shape, meta.out_ndim, ao);
+   compute_batch_offset(b_idx, meta.b_shape, meta.b_strides, meta.b_ndim, meta.out_shape, meta.out_ndim, bo);
+   compute_batch_offset(b_idx, meta.out_shape, meta.out_strides, meta.out_ndim, meta.out_shape, meta.out_ndim, co);
+   const float *Ap = A + ao, *Bp = B + bo; float *Cp = C + co;
+   int s_am = meta.a_strides[meta.a_ndim-2], s_ak = meta.a_strides[meta.a_ndim-1], s_bk = meta.b_strides[meta.b_ndim-2], s_bn = meta.b_strides[meta.b_ndim-1], s_cm = meta.out_strides[meta.out_ndim-2], s_cn = meta.out_strides[meta.out_ndim-1];
+
+   __shared__ float As[2][BK][BM + PAD];
+   __shared__ float Bs[2][BK][BN + PAD];
+   float results[16] = {0.0f}, regM[4], regN[4];
+
+   auto load_tiles = [&](int ko, int idx) {
+      if (s_ak == 1 && s_bn == 1) { // Row-Major Contiguous
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            int li = tid + i * 1024, r = li / 16, c = li % 16;
+            As[idx][c][r] = (by*128+r < M && ko+c < K) ? Ap[(by*128+r)*s_am + (ko+c)] : 0.0f;
+         }
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            int li = tid + i * 1024, r = li / 128, c = li % 128;
+            Bs[idx][r][c] = (ko+r < K && bx*128+c < N) ? Bp[(ko+r)*s_bk + (bx*128+c)] : 0.0f;
+         }
+      } else { // Generic
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            int li = tid + i * 1024, r = li / BK, c = li % BK;
+            As[idx][c][r] = (by*BM+r < M && ko+c < K) ? Ap[(by*BM+r)*s_am + (ko+c)*s_ak] : 0.0f;
+         }
+         #pragma unroll
+         for (int i = 0; i < 2; i++) {
+            int li = tid + i * 1024, r = li / BN, c = li % BN;
+            Bs[idx][r][c] = (ko+r < K && bx*BN+c < N) ? Bp[(ko+r)*s_bk + (bx*BN+c)*s_bn] : 0.0f;
+         }
+      }
+   };
+
+   int wi = 0; load_tiles(0, wi); __syncthreads();
+   for (int bk = 0; bk < K; bk += BK) {
+      int ri = wi; wi = 1 - wi;
+      if (bk + BK < K) load_tiles(bk + BK, wi);
+      #pragma unroll
+      for (int d = 0; d < BK; d++) {
+         #pragma unroll
+         for (int i = 0; i < 4; i++) regM[i] = As[ri][d][tRow*4 + i];
+         #pragma unroll
+         for (int j = 0; j < 4; j++) regN[j] = Bs[ri][d][tCol*4 + j];
+         #pragma unroll
+         for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) results[i*4+j] += regM[i] * regN[j];
+      }
+      __syncthreads();
+   }
+   for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+      int r = by*BM + tRow*4 + i, c = bx*BN + tCol*4 + j;
+      if (r < M && c < N) Cp[r*s_cm + c*s_cn] = results[i*4+j];
+   }
 }
 
-// =============================================================================
-// MAIN DISPATCH FUNCTION - Optimized version
-// =============================================================================
+// ============================================================================
+// FP64 KERNEL (64x64x8 Tile, 256 Threads, 4x4 Tiling)
+// ============================================================================
 
-void cuda_matmul(const Tensor& A, const Tensor& B, Tensor& output, cudaStream_t stream)
-{
-    const auto& a_shape = A.shape().dims;
-    const auto& b_shape = B.shape().dims;
-    const auto& out_shape = output.shape().dims;
-    
-    size_t a_ndim = a_shape.size();
-    size_t b_ndim = b_shape.size();
-    size_t out_ndim = out_shape.size();
-    
-    // Matrix dimensions (last 2 dims)
-    int M = a_shape[a_ndim - 2];
-    int K = a_shape[a_ndim - 1];  // = b_shape[b_ndim - 2]
-    int N = b_shape[b_ndim - 1];
-    
-    // Calculate total batches
-    int total_batches = 1;
-    for (size_t i = 0; i < out_ndim - 2; ++i) {
-        total_batches *= out_shape[i];
-    }
-    
-    // Grid and block dimensions
-    dim3 block(TILE_SIZE, TILE_SIZE);
-    
-    // Ensure grid dimensions are at least 1
-    int grid_x = (N + TILE_SIZE - 1) / TILE_SIZE;
-    int grid_y = (M + TILE_SIZE - 1) / TILE_SIZE;
-    if (grid_x == 0) grid_x = 1;
-    if (grid_y == 0) grid_y = 1;
-    
-    dim3 grid(grid_x, grid_y, total_batches);
-    
-    // Fast path for simple 2D matmul (no batching)
-    if (a_ndim == 2 && b_ndim == 2) {
-        if (A.dtype() == Dtype::Float32) {
-            tiled_matmul_2d_kernel<float><<<grid, block, 0, stream>>>(
-                A.data<float>(), B.data<float>(), output.data<float>(),
-                M, N, K
-            );
-        } else if (A.dtype() == Dtype::Float64) {
-            tiled_matmul_2d_kernel<double><<<grid, block, 0, stream>>>(
-                A.data<double>(), B.data<double>(), output.data<double>(),
-                M, N, K
-            );
-        } else if (A.dtype() == Dtype::Bfloat16) {
-            tiled_matmul_bf16_kernel<<<grid, block, 0, stream>>>(
-                reinterpret_cast<const __nv_bfloat16*>(A.data<bfloat16_t>()),
-                reinterpret_cast<const __nv_bfloat16*>(B.data<bfloat16_t>()),
-                reinterpret_cast<__nv_bfloat16*>(output.data<bfloat16_t>()),
-                M, N, K
-            );
-        } else if (A.dtype() == Dtype::Float16) {
-            tiled_matmul_fp16_kernel<<<grid, block, 0, stream>>>(
-                reinterpret_cast<const __half*>(A.data<float16_t>()),
-                reinterpret_cast<const __half*>(B.data<float16_t>()),
-                reinterpret_cast<__half*>(output.data<float16_t>()),
-                M, N, K
-            );
-        }
-        return;
-    }
-    
-    // Batched matmul path for 3D+ tensors
-    // Calculate batch strides (0 if dimension is 1 for broadcasting)
-    int a_batch_stride = (a_ndim > 2 && a_shape[0] > 1) ? (M * K) : 0;
-    int b_batch_stride = (b_ndim > 2 && b_shape[0] > 1) ? (K * N) : 0;
-    int c_batch_stride = M * N;
-    
-    // Handle simple 3D case with pre-computed strides (no dynamic allocation!)
-    if (a_ndim <= 3 && b_ndim <= 3) {
-        // Recalculate strides for potentially more complex broadcasting
-        if (a_ndim == 3) {
-            a_batch_stride = a_shape[0] > 1 ? (a_shape[1] * a_shape[2]) : 0;
-        }
-        if (b_ndim == 3) {
-            b_batch_stride = b_shape[0] > 1 ? (b_shape[1] * b_shape[2]) : 0;
-        }
-        
-        if (A.dtype() == Dtype::Float32) {
-            tiled_batched_matmul_kernel<float><<<grid, block, 0, stream>>>(
-                A.data<float>(), B.data<float>(), output.data<float>(),
-                total_batches, M, N, K,
-                a_batch_stride, b_batch_stride, c_batch_stride
-            );
-        } else if (A.dtype() == Dtype::Float64) {
-            tiled_batched_matmul_kernel<double><<<grid, block, 0, stream>>>(
-                A.data<double>(), B.data<double>(), output.data<double>(),
-                total_batches, M, N, K,
-                a_batch_stride, b_batch_stride, c_batch_stride
-            );
-        }
-        return;
-    }
-    
-    // Fallback for complex broadcasting cases (4D+)
-    // This path still uses dynamic allocation but should be rare
-    size_t *d_a_shape, *d_b_shape, *d_out_shape;
-    size_t *d_a_strides, *d_b_strides, *d_out_strides;
-
-    cudaMallocAsync(&d_a_shape, a_ndim * sizeof(size_t), stream);
-    cudaMallocAsync(&d_b_shape, b_ndim * sizeof(size_t), stream);
-    cudaMallocAsync(&d_out_shape, out_ndim * sizeof(size_t), stream);
-    cudaMallocAsync(&d_a_strides, a_ndim * sizeof(size_t), stream);
-    cudaMallocAsync(&d_b_strides, b_ndim * sizeof(size_t), stream);
-    cudaMallocAsync(&d_out_strides, out_ndim * sizeof(size_t), stream);
-
-    cudaMemcpyAsync(d_a_shape, a_shape.data(), a_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_b_shape, b_shape.data(), b_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_out_shape, out_shape.data(), out_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_a_strides, A.stride().strides.data(), a_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_b_strides, B.stride().strides.data(), b_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_out_strides, output.stride().strides.data(), out_ndim * sizeof(size_t), cudaMemcpyHostToDevice, stream);
-
-    // Note: Would need to keep old kernel for this fallback path
-    // For now just use the simple batched kernel and accept some edge cases may not work
-
-    cudaFreeAsync(d_a_shape, stream);
-    cudaFreeAsync(d_b_shape, stream);
-    cudaFreeAsync(d_out_shape, stream);
-    cudaFreeAsync(d_a_strides, stream);
-    cudaFreeAsync(d_b_strides, stream);
-    cudaFreeAsync(d_out_strides, stream);
+template<int BM, int BN, int BK, int TM, int TN>
+__global__ void matmul_fp64_optimized(const double* __restrict__ A, const double* __restrict__ B, double* __restrict__ C, int M, int N, int K, int total_batches, MatmulMetadata meta) {
+   const int bx = blockIdx.x, by = blockIdx.y, b_idx = blockIdx.z;
+   if (b_idx >= total_batches) return;
+   const int tid = threadIdx.x, tC = tid % (BN/TN), tR = tid / (BN/TN);
+   int ao, bo, co;
+   compute_batch_offset(b_idx, meta.a_shape, meta.a_strides, meta.a_ndim, meta.out_shape, meta.out_ndim, ao);
+   compute_batch_offset(b_idx, meta.b_shape, meta.b_strides, meta.b_ndim, meta.out_shape, meta.out_ndim, bo);
+   compute_batch_offset(b_idx, meta.out_shape, meta.out_strides, meta.out_ndim, meta.out_shape, meta.out_ndim, co);
+   const double *Ap = A + ao, *Bp = B + bo; double *Cp = C + co;
+   int s_am = meta.a_strides[meta.a_ndim-2], s_ak = meta.a_strides[meta.a_ndim-1], s_bk = meta.b_strides[meta.b_ndim-2], s_bn = meta.b_strides[meta.b_ndim-1], s_cm = meta.out_strides[meta.out_ndim-2], s_cn = meta.out_strides[meta.out_ndim-1];
+   __shared__ double As[BM*BK], Bs[BK*BN];
+   double res[16] = {0.0}, rM[4], rN[4];
+   for (int bk = 0; bk < K; bk += BK) {
+      for (int i = tid; i < BM*BK; i += 256) { int r = i/BK, c = i%BK; As[i] = (by*BM+r < M && bk+c < K) ? Ap[(by*BM+r)*s_am + (bk+c)*s_ak] : 0.0; }
+      for (int i = tid; i < BK*BN; i += 256) { int r = i/BN, c = i%BN; Bs[i] = (bk+r < K && bx*BN+c < N) ? Bp[(bk+r)*s_bk + (bk+c)*s_bn] : 0.0; }
+      __syncthreads();
+      for (int d = 0; d < BK; d++) {
+         for (int i = 0; i < 4; i++) rM[i] = As[(tR*4+i)*BK+d];
+         for (int i = 0; i < 4; i++) rN[i] = Bs[d*BN+tC*4+i];
+         for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) res[i*4+j] += rM[i] * rN[j];
+      }
+      __syncthreads();
+   }
+   for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) { int r = by*BM+tR*4+i, c = bx*BN+tC*4+j; if (r < M && c < N) Cp[r*s_cm + c*s_cn] = res[i*4+j]; }
 }
 
+// ============================================================================
+// DISPATCH LAYER
+// ============================================================================
+
+template<typename T>
+void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, cudaStream_t stream) {
+   const auto& ash = A.shape().dims, &bsh = B.shape().dims, &osh = output.shape().dims;
+   int an = ash.size(), bn = bsh.size(), on = osh.size(), M = ash[an-2], K = ash[an-1], N = bsh[bn-1], tb = 1;
+   for (int i = 0; i < on - 2; i++) tb *= osh[i];
+   MatmulMetadata meta; meta.a_ndim = an; meta.b_ndim = bn; meta.out_ndim = on;
+   for (int i = 0; i < an; i++) { meta.a_shape[i] = ash[i]; meta.a_strides[i] = A.stride().strides[i]; }
+   for (int i = 0; i < bn; i++) { meta.b_shape[i] = bsh[i]; meta.b_strides[i] = B.stride().strides[i]; }
+   for (int i = 0; i < on; i++) { meta.out_shape[i] = osh[i]; meta.out_strides[i] = output.stride().strides[i]; }
+   const T* ap = A.data<T>(), *bp = B.data<T>(); T* op = output.data<T>();
+
+   if constexpr (std::is_same<T, float16_t>::value || std::is_same<T, __half>::value) {
+      matmul_fp16_optimized<128, 128, 32, 32, 32><<<dim3((N+127)/128, (M+127)/128, tb), 512, 0, stream>>>(reinterpret_cast<const __half*>(ap), reinterpret_cast<const __half*>(bp), reinterpret_cast<__half*>(op), M, N, K, tb, meta);
+   } else if constexpr (std::is_same<T, bfloat16_t>::value || std::is_same<T, __nv_bfloat16>::value) {
+      matmul_bf16_optimized<128, 128, 32, 32, 32><<<dim3((N+127)/128, (M+127)/128, tb), 512, 0, stream>>>(reinterpret_cast<const __nv_bfloat16*>(ap), reinterpret_cast<const __nv_bfloat16*>(bp), reinterpret_cast<__nv_bfloat16*>(op), M, N, K, tb, meta);
+   } else if constexpr (std::is_same<T, float>::value) {
+      matmul_fp32_optimized<128, 128, 16, 4, 4><<<dim3((N+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(ap, bp, op, M, N, K, tb, meta);
+   } else if constexpr (std::is_same<T, double>::value) {
+      matmul_fp64_optimized<64, 64, 8, 4, 4><<<dim3((N+63)/64, (M+63)/64, tb), 256, 0, stream>>>(reinterpret_cast<const double*>(ap), reinterpret_cast<const double*>(bp), reinterpret_cast<double*>(op), M, N, K, tb, meta);
+   }
+
+   cudaError_t err = cudaGetLastError();
+   if (err != cudaSuccess) throw std::runtime_error("Kernel failed: " + std::string(cudaGetErrorString(err)));
 }
+
+void cuda_matmul(const Tensor& A, const Tensor& B, Tensor& output, cudaStream_t stream) {
+   dispatch_by_dtype(A.dtype(), [&](auto d) {
+      using T = decltype(d);
+      if constexpr (std::is_same<T, float16_t>::value || std::is_same<T, bfloat16_t>::value || std::is_same<T, float>::value || std::is_same<T, double>::value) launch_optimized_matmul<T>(A, B, output, stream);
+      else throw std::runtime_error("Unsupported type");
+   });
+}
+
+} // namespace OwnTensor
 #endif

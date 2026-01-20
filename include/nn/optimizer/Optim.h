@@ -143,5 +143,5 @@ private:
  * @param max_norm Maximum allowed gradient norm
  * @return The original global norm before clipping
  */
-float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm);
+float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_type = 2.0f, bool error_if_nonfinite = false);
 } // namespace OwnTensor

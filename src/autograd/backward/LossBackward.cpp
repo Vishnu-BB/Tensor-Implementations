@@ -4,6 +4,10 @@
 #include "ops/helpers/ConditionalOps.h"
 #include <stdexcept>
 
+#ifdef WITH_CUDA
+#include "ops/helpers/LossKernels.h"
+#endif
+
 namespace OwnTensor {
 namespace autograd {
 
@@ -221,44 +225,55 @@ std::vector<Tensor> SparseCrossEntropyLossBackward::apply(std::vector<Tensor>&& 
             }
         }
     } else {
-        // CUDA: transfer to CPU, compute, transfer back
-        Tensor logits_cpu = logits_2d.to_cpu();
-        Tensor targets_cpu = saved_targets_.to_cpu();
-        Tensor grad_cpu = Tensor::zeros(logits_2d.shape(), 
-            TensorOptions().with_dtype(saved_logits_.dtype()));
+        // CUDA: Use optimized CUDA kernel
+        #ifdef WITH_CUDA
+        grad_logits_2d = Tensor::zeros(logits_2d.shape(), opts);
         
-        const float* logits_data = logits_cpu.data<float>();
-        float* grad_data = grad_cpu.data<float>();
+        float scale = grad_val / static_cast<float>(batch_size_);
         
-        for (int64_t i = 0; i < batch_size_; ++i) {
-            float max_val = logits_data[i * num_classes_];
-            for (int64_t c = 1; c < num_classes_; ++c) {
-                max_val = std::max(max_val, logits_data[i * num_classes_ + c]);
+        // Dispatch based on dtype
+        if (logits_2d.dtype() == Dtype::Float32) {
+            if (saved_targets_.dtype() == Dtype::UInt16) {
+                cuda::sparse_cross_entropy_backward_cuda<float, uint16_t>(
+                    logits_2d.data<float>(),
+                    saved_targets_.data<uint16_t>(),
+                    grad_logits_2d.data<float>(),
+                    batch_size_,
+                    num_classes_,
+                    scale,
+                    0  // default stream
+                );
+            } else if (saved_targets_.dtype() == Dtype::Int64) {
+                cuda::sparse_cross_entropy_backward_cuda<float, int64_t>(
+                    logits_2d.data<float>(),
+                    saved_targets_.data<int64_t>(),
+                    grad_logits_2d.data<float>(),
+                    batch_size_,
+                    num_classes_,
+                    scale,
+                    0
+                );
+            } else if (saved_targets_.dtype() == Dtype::Int32) {
+                cuda::sparse_cross_entropy_backward_cuda<float, int32_t>(
+                    logits_2d.data<float>(),
+                    saved_targets_.data<int32_t>(),
+                    grad_logits_2d.data<float>(),
+                    batch_size_,
+                    num_classes_,
+                    scale,
+                    0
+                );
+            } else {
+                throw std::runtime_error("SparseCrossEntropyLossBackward: unsupported target dtype for CUDA");
             }
-            
-            float sum_exp = 0.0f;
-            std::vector<float> exp_vals(num_classes_);
-            for (int64_t c = 0; c < num_classes_; ++c) {
-                exp_vals[c] = std::exp(logits_data[i * num_classes_ + c] - max_val);
-                sum_exp += exp_vals[c];
-            }
-            
-            int64_t target_class = 0;
-            if (targets_cpu.dtype() == Dtype::Int64) {
-                target_class = targets_cpu.data<int64_t>()[i];
-            } else if (targets_cpu.dtype() == Dtype::UInt16) {
-                target_class = static_cast<int64_t>(targets_cpu.data<uint16_t>()[i]);
-            }
-            
-            float scale = grad_val / static_cast<float>(batch_size_);
-            for (int64_t c = 0; c < num_classes_; ++c) {
-                float softmax_val = exp_vals[c] / sum_exp;
-                float one_hot = (c == target_class) ? 1.0f : 0.0f;
-                grad_data[i * num_classes_ + c] = (softmax_val - one_hot) * scale;
-            }
+        } else {
+            throw std::runtime_error("SparseCrossEntropyLossBackward: only Float32 supported for CUDA");
         }
         
-        grad_logits_2d = grad_cpu.to(saved_logits_.device());
+        cudaDeviceSynchronize();
+        #else
+        throw std::runtime_error("CUDA not available but tensor is on CUDA device");
+        #endif
     }
     
     // Reshape gradient back to original shape if needed

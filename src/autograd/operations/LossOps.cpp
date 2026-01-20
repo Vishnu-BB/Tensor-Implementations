@@ -7,6 +7,10 @@
 #include "ops/UnaryOps/Exponents.h"
 #include "ops/UnaryOps/Arithmetics.h"
 
+#ifdef WITH_CUDA
+#include "ops/helpers/LossKernels.h"
+#endif
+
 namespace OwnTensor {
 namespace autograd {
 
@@ -182,34 +186,55 @@ Tensor sparse_cross_entropy_loss(const Tensor& logits, const Tensor& targets) {
             total_loss += loss_i;
         }
     } else {
-        // CUDA: transfer to CPU for computation
-        Tensor logits_cpu = logits_2d.to_cpu();
-        Tensor targets_cpu = targets_1d.to_cpu();
+        // CUDA: Use optimized CUDA kernel
+        #ifdef WITH_CUDA
+        // Allocate output tensor on GPU for total loss
+        Tensor loss_tensor = Tensor::zeros(Shape{{1}}, opts);
         
-        const float* logits_data = logits_cpu.data<float>();
-        
-        for (int64_t i = 0; i < batch_size; ++i) {
-            float max_val = logits_data[i * num_classes];
-            for (int64_t c = 1; c < num_classes; ++c) {
-                max_val = std::max(max_val, logits_data[i * num_classes + c]);
+        // Dispatch based on dtype
+        if (logits_2d.dtype() == Dtype::Float32) {
+            if (targets_1d.dtype() == Dtype::UInt16) {
+                cuda::sparse_cross_entropy_forward_cuda<float, uint16_t>(
+                    logits_2d.data<float>(),
+                    targets_1d.data<uint16_t>(),
+                    loss_tensor.data<float>(),
+                    batch_size,
+                    num_classes,
+                    0  // default stream
+                );
+            } else if (targets_1d.dtype() == Dtype::Int64) {
+                cuda::sparse_cross_entropy_forward_cuda<float, int64_t>(
+                    logits_2d.data<float>(),
+                    targets_1d.data<int64_t>(),
+                    loss_tensor.data<float>(),
+                    batch_size,
+                    num_classes,
+                    0
+                );
+            } else if (targets_1d.dtype() == Dtype::Int32) {
+                cuda::sparse_cross_entropy_forward_cuda<float, int32_t>(
+                    logits_2d.data<float>(),
+                    targets_1d.data<int32_t>(),
+                    loss_tensor.data<float>(),
+                    batch_size,
+                    num_classes,
+                    0
+                );
+            } else {
+                throw std::runtime_error("sparse_cross_entropy_loss: unsupported target dtype for CUDA");
             }
-            
-            float sum_exp = 0.0f;
-            for (int64_t c = 0; c < num_classes; ++c) {
-                sum_exp += std::exp(logits_data[i * num_classes + c] - max_val);
-            }
-            float log_sum_exp = max_val + std::log(sum_exp);
-            
-            int64_t target_class = 0;
-            if (targets_cpu.dtype() == Dtype::Int64) {
-                target_class = targets_cpu.data<int64_t>()[i];
-            } else if (targets_cpu.dtype() == Dtype::UInt16) {
-                target_class = static_cast<int64_t>(targets_cpu.data<uint16_t>()[i]);
-            }
-            
-            float loss_i = log_sum_exp - logits_data[i * num_classes + target_class];
-            total_loss += loss_i;
+        } else {
+            throw std::runtime_error("sparse_cross_entropy_loss: only Float32 supported for CUDA forward pass");
         }
+        
+        cudaDeviceSynchronize();
+        
+        // Transfer result to CPU to get scalar value
+        Tensor loss_cpu = loss_tensor.to_cpu();
+        total_loss = loss_cpu.data<float>()[0];
+        #else
+        throw std::runtime_error("CUDA not available but tensor is on CUDA device");
+        #endif
     }
     
     // Average loss
