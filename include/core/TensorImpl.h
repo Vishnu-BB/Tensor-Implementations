@@ -164,6 +164,7 @@ private:
     Storage storage_;                                      // Underlying data storage
     std::unique_ptr<AutogradMetaInterface> autograd_meta_; // Autograd metadata (lazy)
     VariableVersion version_counter_;                      // Version for in-place ops
+    intrusive_ptr<TensorImpl> base_impl_;                  // Original tensor if this is a view
     
     // Tensor metadata
     Shape shape_;                                // Tensor dimensions
@@ -187,13 +188,15 @@ public:
      * @param offset Offset into storage
      * @param dtype Data type
      * @param device Device location
+     * @param base_impl Original TensorImpl to keep alive
      */
     TensorImpl(Storage&& storage,
                const Shape& shape,
                const Stride& stride,
                int64_t offset,
                Dtype dtype,
-               DeviceIndex device);
+               DeviceIndex device,
+               intrusive_ptr<TensorImpl> base_impl = {});
     
     /**
      * Constructor: Create TensorImpl and allocate new Storage

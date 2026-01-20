@@ -20,7 +20,7 @@ std::vector<Tensor> SquareBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("SquareBackward: no grads");
     
     // grad_x = grad_output * 2 * input
-    return {grads[0] * 2.0f * saved_input_};
+    return {grads[0] * 2.0 * saved_input_};
 }
 
 // ============================================================================
@@ -35,7 +35,7 @@ std::vector<Tensor> SqrtBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_x = grad_output / (2 * sqrt(input))
     Tensor sqrt_x = OwnTensor::sqrt(saved_input_);
-    return {grads[0] / (2.0f * sqrt_x)};
+    return {grads[0] / (2.0 * sqrt_x)};
 }
 
 // ============================================================================
@@ -45,7 +45,7 @@ std::vector<Tensor> SqrtBackward::apply(std::vector<Tensor>&& grads) {
 std::vector<Tensor> NegBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("NegBackward: no grads");
     
-    return {grads[0] * -1.0f};
+    return {grads[0] * -1.0};
 }
 
 // ============================================================================
@@ -75,7 +75,7 @@ std::vector<Tensor> ReciprocalBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_x = -grad_output / input^2
     Tensor input_sq = saved_input_ * saved_input_;
-    return {grads[0] * -1.0f / input_sq};
+    return {grads[0] * -1.0 / input_sq};
 }
 
 // ============================================================================
@@ -89,8 +89,8 @@ std::vector<Tensor> PowBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("PowBackward: no grads");
     
     // grad_x = grad_output * exponent * input^(exponent-1)
-    Tensor derived = OwnTensor::pow(saved_input_, exponent_ - 1.0f);
-    return {grads[0] * exponent_ * derived};
+    Tensor derived = OwnTensor::pow(saved_input_, static_cast<double>(exponent_) - 1.0);
+    return {grads[0] * static_cast<double>(exponent_) * derived};
 }
 
 } // namespace autograd

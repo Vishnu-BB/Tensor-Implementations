@@ -14,13 +14,15 @@ TensorImpl::TensorImpl(Storage&& storage,
                        const Stride& stride,
                        int64_t offset,
                        Dtype dtype,
-                       DeviceIndex device)
+                       DeviceIndex device,
+                       intrusive_ptr<TensorImpl> base_impl)
     : storage_(std::move(storage)),
       shape_(shape),
       stride_(stride),
       storage_offset_(offset),
       dtype_(dtype),
-      device_(device) {
+      device_(device),
+      base_impl_(std::move(base_impl)) {
     // autograd_meta_ is nullptr - lazy allocation
 }
 

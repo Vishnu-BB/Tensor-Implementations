@@ -39,6 +39,12 @@ int main() {
     std::vector<float> losses;
     
     for (int epoch = 0; epoch < epochs; ++epoch) {
+        // IMPORTANT: Zero gradients before each forward pass
+        W1.zero_grad();
+        W2.zero_grad();
+        b1.zero_grad();
+        b2.zero_grad();
+
         // Forward pass
         Tensor h1 = autograd::matmul(x, W1);       // (1,2) @ (2,4) = (1,4)
         Tensor h1_bias = autograd::add(h1, b1);    // (1,4) + (4) = (1,4)
@@ -57,14 +63,22 @@ int main() {
         loss = autograd::mean(loss);
         
         float loss_val = loss.data<float>()[0];
-        losses.push_back(loss_val);
-        
-        if (epoch % 20 == 0) {
-            std::cout << "Epoch " << epoch << ": Loss = " << loss_val << std::endl;
+        if (std::isnan(loss_val) || std::isinf(loss_val)) {
+            std::cerr << "NaN/Inf loss detected at epoch " << epoch << "!" << std::endl;
+            break;
         }
+        losses.push_back(loss_val);
         
         // Backward pass
         loss.backward();
+        
+        if (epoch % 20 == 0) {
+            std::cout << "Epoch " << epoch << ": Loss = " << loss_val << ", Output = " << output.data<float>()[0] << std::endl;
+            if (epoch == 0 || epoch == 20) {
+                std::cout << "  W1 grad[0]: " << (W1.owns_grad() ? W1.grad<float>()[0] : -1.0f) << std::endl;
+                std::cout << "  W2 grad[0]: " << (W2.owns_grad() ? W2.grad<float>()[0] : -1.0f) << std::endl;
+            }
+        }
         
         // SGD update (manual)
         // Note: This is a simplified update. In practice, you'd use an optimizer.

@@ -46,6 +46,8 @@ Tensor dispatch_variance_gpu(const Tensor& input,
                              bool keepdim,
                              int64_t correction,
                              cudaStream_t stream);//✨✨✨                        
+
+constexpr size_t MAX_DIMS = 16;
 // =================================================================
 // HELPER: Safe isnan check for both real and complex types
 // =================================================================
@@ -162,10 +164,9 @@ Tensor reduce_kernel(
             reduced_dims.push_back(input_dims[dim]);
         }
     }
- constexpr size_t MAX_DIMS = 16;
     const size_t ndim = output_shape.dims.size();
     
-    if (ndim > MAX_DIMS) {
+    if (input_dims.size() > MAX_DIMS) {
         throw std::runtime_error("Tensor rank exceeds maximum supported dimensions (16)");
     }
     // =================================================================
@@ -196,26 +197,30 @@ Tensor reduce_kernel(
             ValueIndex<T> accumulator = op.identity();
           
             for (int64_t i = 0; i < reduced_count; ++i) {
-                std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims); 
-                std::vector<int64_t> full_input_coords(input_dims.size());
+                // Use stack-allocated buffers for indices
+                int64_t slice_coords_buf[MAX_DIMS];
+                int64_t full_input_coords_buf[MAX_DIMS];
+                
+                unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+                
                 int out_coord_idx = 0;
                 int slice_coord_idx = 0;
                 
                 for (size_t dim = 0; dim < input_dims.size(); ++dim) {
                     bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) != normalized_axes.end();
                     if (is_reduced) {
-                        full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                        full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                     } else {
                         if (rank_preserved) {
-                            full_input_coords[dim] = out_coords_buf[dim];
+                            full_input_coords_buf[dim] = out_coords_buf[dim];
                         } else {
-                            full_input_coords[dim] = out_coords_buf[out_coord_idx];
+                            full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                         }
                         out_coord_idx++;
                     }
                 }
                 
-                int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+                int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
                 T input_value = input_data[input_lin_idx];
                 ValueIndex<T> current_val_index = {input_value, i};
                 accumulator = op.reduce(accumulator, current_val_index);
@@ -238,26 +243,29 @@ Tensor reduce_kernel(
                 
                 // Kahan Loop
                 for (int64_t i = 0; i < reduced_count; ++i) {
-                    std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims); 
-                    std::vector<int64_t> full_input_coords(input_dims.size());
+                    int64_t slice_coords_buf[MAX_DIMS];
+                    int64_t full_input_coords_buf[MAX_DIMS];
+                    
+                    unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+                    
                     int out_coord_idx = 0;
                     int slice_coord_idx = 0;
                     
                     for (size_t dim = 0; dim < input_dims.size(); ++dim) {
                         bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) != normalized_axes.end();
                         if (is_reduced) {
-                            full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                            full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                         } else {
                             if (rank_preserved) {
-                                full_input_coords[dim] = out_coords_buf[dim];
+                                full_input_coords_buf[dim] = out_coords_buf[dim];
                             } else {
-                                full_input_coords[dim] = out_coords_buf[out_coord_idx];
+                                full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                             }
                             out_coord_idx++;
                         }
                     }
                     
-                    int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+                    int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
                     T input_value = input_data[input_lin_idx];
 
                     // Kahan summation for maximum numerical stability
@@ -309,26 +317,29 @@ Tensor reduce_kernel(
 
                 // Standard Loop
                 for (int64_t i = 0; i < reduced_count; ++i) {
-                    std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims); 
-                    std::vector<int64_t> full_input_coords(input_dims.size());
+                    int64_t slice_coords_buf[MAX_DIMS];
+                    int64_t full_input_coords_buf[MAX_DIMS];
+                    
+                    unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+                    
                     int out_coord_idx = 0;
                     int slice_coord_idx = 0;
                     
                     for (size_t dim = 0; dim < input_dims.size(); ++dim) {
                         bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) != normalized_axes.end();
                         if (is_reduced) {
-                            full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                            full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                         } else {
                             if (rank_preserved) {
-                                full_input_coords[dim] = out_coords_buf[dim];
+                                full_input_coords_buf[dim] = out_coords_buf[dim];
                             } else {
-                                full_input_coords[dim] = out_coords_buf[out_coord_idx];
+                                full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                             }
                             out_coord_idx++;
                         }
                     }
                     
-                    int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+                    int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
                     T input_value = input_data[input_lin_idx];
 
 
@@ -561,6 +572,10 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
         throw std::runtime_error("Cannot compute mean: reduced count is zero.");
     }
 
+    if (input.shape().dims.size() > MAX_DIMS) {
+        throw std::runtime_error("Tensor rank exceeds maximum supported dimensions (16)");
+    }
+
     Shape output_shape = detail::calculate_output_shape(input.shape().dims, normalized_axes, keepdim);
 
     if constexpr (std::is_integral_v<T>) {
@@ -585,33 +600,38 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
         double* output_data = output.data<double>();
         //SumOpType<T> op;
         
+        const size_t ndim = output_shape.dims.size();
         #pragma omp parallel for
         for (int64_t output_index = 0; output_index < num_slices; ++output_index) {
             int64_t accumulator = 0;
             
-            std::vector<int64_t> out_coords = unravel_index(output_index, output_shape.dims);
+            int64_t out_coords_buf[MAX_DIMS];
+            unravel_index_stack(output_index, output_shape.dims.data(), ndim, out_coords_buf);
             
             for (int64_t i = 0; i < reduced_count; ++i) {
-                std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims);
-                std::vector<int64_t> full_input_coords(input_dims.size());
+                int64_t slice_coords_buf[MAX_DIMS];
+                int64_t full_input_coords_buf[MAX_DIMS];
+                
+                unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+                
                 int out_coord_idx = 0;
                 int slice_coord_idx = 0;
                 
                 for (size_t dim = 0; dim < input_dims.size(); ++dim) {
                     bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) != normalized_axes.end();
                     if (is_reduced) {
-                        full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                        full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                     } else {
                         if (rank_preserved) {
-                            full_input_coords[dim] = out_coords[dim];
+                            full_input_coords_buf[dim] = out_coords_buf[dim];
                         } else {
-                            full_input_coords[dim] = out_coords[out_coord_idx];
+                            full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                         }
                         out_coord_idx++;
                     }
                 }
                 
-                int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+                int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
                 T input_value = input_data[input_lin_idx];
                 
                 accumulator += input_value;
@@ -662,32 +682,37 @@ Tensor dispatch_mean_kernel(const Tensor& input, const std::vector<int64_t>& nor
         // Create a tensor to store valid counts for each output position
         std::vector<int64_t> valid_counts(num_slices, 0);
         
+        const size_t ndim = output_shape.dims.size();
         #pragma omp parallel for
         for (int64_t output_index = 0; output_index < num_slices; ++output_index) {
             int64_t valid_count = 0;
-            std::vector<int64_t> out_coords = unravel_index(output_index, output_shape.dims);
+            int64_t out_coords_buf[MAX_DIMS];
+            unravel_index_stack(output_index, output_shape.dims.data(), ndim, out_coords_buf);
             
             for (int64_t i = 0; i < reduced_count; ++i) {
-                std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims);
-                std::vector<int64_t> full_input_coords(input_dims.size());
+                int64_t slice_coords_buf[MAX_DIMS];
+                int64_t full_input_coords_buf[MAX_DIMS];
+                
+                unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+                
                 int out_coord_idx = 0;
                 int slice_coord_idx = 0;
                 
                 for (size_t dim = 0; dim < input_dims.size(); ++dim) {
                     bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) != normalized_axes.end();
                     if (is_reduced) {
-                        full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                        full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                     } else {
                         if (rank_preserved) {
-                            full_input_coords[dim] = out_coords[dim];
+                            full_input_coords_buf[dim] = out_coords_buf[dim];
                         } else {
-                            full_input_coords[dim] = out_coords[out_coord_idx];
+                            full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                         }
                         out_coord_idx++;
                     }
                 }
                 
-                int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+                int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
                 T input_value = input_data[input_lin_idx];
                 
                 
@@ -852,6 +877,14 @@ Tensor dispatch_variance_kernel(const Tensor& input,
     //  STEP 2: Calculate output shape and metadata
     Shape output_shape = calculate_output_shape(input.shape().dims, normalized_axes, keepdim);
     int64_t reduced_count = calculate_reduced_count(input.shape().dims, normalized_axes);
+
+    if (reduced_count == 0) {
+        throw std::runtime_error("Cannot compute variance: reduced count is zero.");
+    }
+
+    if (input.shape().dims.size() > MAX_DIMS) {
+        throw std::runtime_error("Tensor rank exceeds maximum supported dimensions (16)");
+    }
     
     // Determine output dtype
     Dtype output_dtype;
@@ -914,37 +947,38 @@ Tensor dispatch_variance_kernel(const Tensor& input,
         }
     }
     
-    //  STEP 4: Compute sum of squared deviations in parallel
+    const size_t ndim = output_shape.dims.size();
     #pragma omp parallel for
     for (int64_t output_index = 0; output_index < num_slices; ++output_index) {
         AccT accumulator = AccT(0.0f);
         int64_t valid_count = 0;  // Only used for NaN-aware variance
         
         // Calculate output coordinates
-        std::vector<int64_t> out_coords = unravel_index(output_index, output_shape.dims);
+        int64_t out_coords_buf[MAX_DIMS];
+        unravel_index_stack(output_index, output_shape.dims.data(), ndim, out_coords_buf);
         
         //  Map output coordinates to mean tensor coordinates
         // Since mean was computed with keepdim=true, it has same rank as input
-        std::vector<int64_t> mean_coords(input_dims.size());
+        int64_t mean_coords_buf[MAX_DIMS];
         int out_coord_idx = 0;
         
         for (size_t dim = 0; dim < input_dims.size(); ++dim) {
             bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) 
                              != normalized_axes.end();
             if (is_reduced) {
-                mean_coords[dim] = 0;  // Mean tensor has size 1 in reduced dimensions
+                mean_coords_buf[dim] = 0;  // Mean tensor has size 1 in reduced dimensions
             } else {
                 if (rank_preserved) {
-                    mean_coords[dim] = out_coords[dim];
+                    mean_coords_buf[dim] = out_coords_buf[dim];
                 } else {
-                    mean_coords[dim] = out_coords[out_coord_idx];
+                    mean_coords_buf[dim] = out_coords_buf[out_coord_idx];
                 }
                 out_coord_idx++;
             }
         }
         
         // Get the pre-computed mean value for this slice
-        int64_t mean_lin_idx = ravel_index(mean_coords, mean_strides);
+        int64_t mean_lin_idx = ravel_index_stack(mean_coords_buf, mean_strides.data(), input_dims.size());
         AccT mean_val = static_cast<AccT>(mean_data[mean_lin_idx]);
         
         // Check if mean is NaN
@@ -961,8 +995,11 @@ Tensor dispatch_variance_kernel(const Tensor& input,
         
         //  Accumulate squared deviations
         for (int64_t i = 0; i < reduced_count; ++i) {
-            std::vector<int64_t> slice_coords = detail::unravel_index(i, reduced_dims);
-            std::vector<int64_t> full_input_coords(input_dims.size());
+            int64_t slice_coords_buf[MAX_DIMS];
+            int64_t full_input_coords_buf[MAX_DIMS];
+            
+            unravel_index_stack(i, reduced_dims.data(), reduced_dims.size(), slice_coords_buf);
+            
             out_coord_idx = 0;
             int slice_coord_idx = 0;
             
@@ -970,18 +1007,18 @@ Tensor dispatch_variance_kernel(const Tensor& input,
                 bool is_reduced = std::find(normalized_axes.begin(), normalized_axes.end(), (int64_t)dim) 
                                  != normalized_axes.end();
                 if (is_reduced) {
-                    full_input_coords[dim] = slice_coords[slice_coord_idx++];
+                    full_input_coords_buf[dim] = slice_coords_buf[slice_coord_idx++];
                 } else {
                     if (rank_preserved) {
-                        full_input_coords[dim] = out_coords[dim];
+                        full_input_coords_buf[dim] = out_coords_buf[dim];
                     } else {
-                        full_input_coords[dim] = out_coords[out_coord_idx];
+                        full_input_coords_buf[dim] = out_coords_buf[out_coord_idx];
                     }
                     out_coord_idx++;
                 }
             }
             
-            int64_t input_lin_idx = ravel_index(full_input_coords, input_strides);
+            int64_t input_lin_idx = ravel_index_stack(full_input_coords_buf, input_strides.data(), input_dims.size());
             T input_value = input_data[input_lin_idx];
             
             // Check if value is NaN

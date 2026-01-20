@@ -28,11 +28,11 @@ std::vector<Tensor> SumBackward::apply(std::vector<Tensor>&& grads) {
     
     // Scale by grad_output value (if scalar)
     if (grad_output.ndim() == 0 || grad_output.numel() == 1) {
-        float grad_val;
+        double grad_val;
         if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
+            grad_val = static_cast<double>(grad_output.to_cpu().data<float>()[0]);
         } else {
-            grad_val = *grad_output.data<float>();
+            grad_val = static_cast<double>(*grad_output.data<float>());
         }
         grad_input = grad_input * grad_val;
     }
@@ -62,13 +62,13 @@ std::vector<Tensor> MeanBackward::apply(std::vector<Tensor>&& grads) {
     
     // Scale by grad_output / numel
     if (grad_output.ndim() == 0 || grad_output.numel() == 1) {
-        float grad_val;
+        double grad_val;
         if (grad_output.is_cuda()) {
-            grad_val = grad_output.to_cpu().data<float>()[0];
+            grad_val = static_cast<double>(grad_output.to_cpu().data<float>()[0]);
         } else {
-            grad_val = *grad_output.data<float>();
+            grad_val = static_cast<double>(*grad_output.data<float>());
         }
-        float scale = grad_val / static_cast<float>(numel_);
+        double scale = grad_val / static_cast<double>(numel_);
         grad_input = grad_input * scale;
     }
     

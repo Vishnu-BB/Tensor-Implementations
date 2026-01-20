@@ -99,13 +99,15 @@ namespace OwnTensor
         );
         
         // Create new TensorImpl with shared storage but different metadata
+        // Pass the original implementation (impl) to keep it alive via base_impl_
         impl_ = make_intrusive<TensorImpl>(
             std::move(shared_storage),
             shape,
             stride,
             offset,
             impl->dtype(),
-            impl->device()
+            impl->device(),
+            impl // Pass base_impl
         );
 
         if (impl->requires_grad()) {

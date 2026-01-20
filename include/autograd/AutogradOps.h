@@ -12,6 +12,9 @@
 
 // Include all operation categories
 #include "autograd/operations/BinaryOps.h"
+#include "autograd/operations/ArithmeticsOps.h"
+#include "autograd/operations/ExponentsOps.h"
+#include "autograd/operations/TrigonometryOps.h"
 #include "autograd/operations/MatrixOps.h"
 #include "autograd/operations/ActivationOps.h"
 #include "autograd/operations/ReductionOps.h"
