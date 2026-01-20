@@ -70,6 +70,19 @@ public:
     void to(DeviceIndex dev) override;
 };
 
+class LayerNorm : public Module {
+public:
+    Tensor weight;
+    Tensor bias;
+    float eps;
+    
+    LayerNorm(int normalized_shape, float eps = 1e-5);
+    
+    Tensor forward(const Tensor& input) override;
+    std::vector<Tensor> parameters() override;
+    void to(DeviceIndex dev) override;
+};
+
 // ============================================================================
 // Containers
 // ============================================================================
