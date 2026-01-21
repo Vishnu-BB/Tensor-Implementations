@@ -15,3 +15,5 @@
 #include "autograd/backward/ReductionBackward.h"
 #include "autograd/backward/LossBackward.h"
 #include "autograd/backward/GradAccumulator.h"
+#include "autograd/backward/EmbeddingBackward.h"
+#include "autograd/backward/NormalizationBackward.h"

@@ -4,16 +4,35 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <mma.h>
+#include <cublas_v2.h>
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
 #include <string>
+#include <mutex>
 
 #include "ops/MatmulBackward.cuh"
 #include "core/Tensor.h"
 #include "core/TensorDispatch.h"
 
 namespace OwnTensor {
+
+// cuBLAS handle management - thread-safe singleton per device
+static std::mutex cublas_mutex_bwd;
+static cublasHandle_t g_cublas_handles_bwd[8] = {nullptr};
+
+static cublasHandle_t get_cublas_handle_bwd(int device = 0) {
+   if (g_cublas_handles_bwd[device] == nullptr) {
+      std::lock_guard<std::mutex> lock(cublas_mutex_bwd);
+      if (g_cublas_handles_bwd[device] == nullptr) {
+         cudaSetDevice(device);
+         cublasCreate(&g_cublas_handles_bwd[device]);
+         // Enable TF32 for FP32 matmuls - major speedup on Ampere+
+         cublasSetMathMode(g_cublas_handles_bwd[device], CUBLAS_TF32_TENSOR_OP_MATH);
+      }
+   }
+   return g_cublas_handles_bwd[device];
+}
 
 using namespace nvcuda;
 
@@ -423,12 +442,71 @@ void launch_backward_matmul(
    // Launch grad_A kernel: grad_A[M, K_a] = grad_output[M, N] @ B[K_b, N]^T
    // Note: K_a should equal K_b for valid matmul
    if constexpr (std::is_same<T, float>::value) {
-      matmul_backward_dA_fp32<128, 128, 16, 4, 4><<<dim3((K_a+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(
-         go_ptr, b_ptr, ga_ptr, M, N, K_a, tb, meta);
+      // Check if tensors are contiguous for cuBLAS fast path
+      bool go_contiguous = (meta.grad_out_strides[go_ndim-1] == 1);
+      bool a_contiguous = (meta.a_strides[a_ndim-1] == 1);
+      bool b_contiguous = (meta.b_strides[b_ndim-1] == 1);
+      bool ga_contiguous = (meta.grad_a_strides[a_ndim-1] == 1);
+      bool gb_contiguous = (meta.grad_b_strides[b_ndim-1] == 1);
       
-      // Launch grad_B kernel: grad_B[K_a, N] = A[M, K_a]^T @ grad_output[M, N]
-      matmul_backward_dB_fp32<128, 128, 16, 4, 4><<<dim3((N+127)/128, (K_a+127)/128, tb), 1024, 0, stream>>>(
-         a_ptr, go_ptr, gb_ptr, M, K_a, N, tb, meta);
+      // Use cuBLAS for 2D contiguous matrices
+      if (tb == 1 && go_contiguous && a_contiguous && b_contiguous && ga_contiguous && gb_contiguous &&
+          M >= 64 && N >= 64 && K_a >= 64) {
+         int current_device; cudaGetDevice(&current_device);
+         cublasHandle_t handle = get_cublas_handle_bwd(current_device);
+         cublasSetStream(handle, stream);
+         float alpha = 1.0f, beta = 0.0f;
+         
+         int lda = meta.a_strides[a_ndim-2];
+         int ldb = meta.b_strides[b_ndim-2];
+         int ldgo = meta.grad_out_strides[go_ndim-2];
+         int ldga = meta.grad_a_strides[a_ndim-2];
+         int ldgb = meta.grad_b_strides[b_ndim-2];
+         
+         // grad_A = grad_output @ B^T
+         // In row-major with TF32: swap operands
+         // C = A @ B^T => C^T = B @ A^T => in colmaj: C = B @ grad_out^T
+         cublasStatus_t status = cublasGemmEx(
+            handle,
+            CUBLAS_OP_T, CUBLAS_OP_N,  // B transposed, grad_out not
+            K_a, M, N,                 // grad_A is [M, K_a]
+            &alpha,
+            b_ptr, CUDA_R_32F, ldb,    // B is [K_a, N]
+            go_ptr, CUDA_R_32F, ldgo,  // grad_out is [M, N]
+            &beta,
+            ga_ptr, CUDA_R_32F, ldga,
+            CUBLAS_COMPUTE_32F_FAST_TF32,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+         );
+         if (status != CUBLAS_STATUS_SUCCESS) {
+            throw std::runtime_error("cuBLAS GEMM (grad_A) failed: " + std::to_string(status));
+         }
+         
+         // grad_B = A^T @ grad_output
+         // In row-major: C = A^T @ B => C^T = B^T @ A => in colmaj: C = grad_out^T @ A
+         status = cublasGemmEx(
+            handle,
+            CUBLAS_OP_N, CUBLAS_OP_T,  // grad_out not transposed, A transposed
+            N, K_a, M,                 // grad_B is [K_a, N]
+            &alpha,
+            go_ptr, CUDA_R_32F, ldgo,  // grad_out is [M, N]
+            a_ptr, CUDA_R_32F, lda,    // A is [M, K_a]
+            &beta,
+            gb_ptr, CUDA_R_32F, ldgb,
+            CUBLAS_COMPUTE_32F_FAST_TF32,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+         );
+         if (status != CUBLAS_STATUS_SUCCESS) {
+            throw std::runtime_error("cuBLAS GEMM (grad_B) failed: " + std::to_string(status));
+         }
+      } else {
+         // Fallback to custom kernels for strided/batched/small matrices
+         matmul_backward_dA_fp32<128, 128, 16, 4, 4><<<dim3((K_a+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(
+            go_ptr, b_ptr, ga_ptr, M, N, K_a, tb, meta);
+         
+         matmul_backward_dB_fp32<128, 128, 16, 4, 4><<<dim3((N+127)/128, (K_a+127)/128, tb), 1024, 0, stream>>>(
+            a_ptr, go_ptr, gb_ptr, M, K_a, N, tb, meta);
+      }
    } else if constexpr (std::is_same<T, float16_t>::value || std::is_same<T, __half>::value) {
       matmul_backward_dA_fp16<128, 128, 32, 32, 32><<<dim3((K_a+127)/128, (M+127)/128, tb), 512, 0, stream>>>(
          reinterpret_cast<const __half*>(go_ptr), 

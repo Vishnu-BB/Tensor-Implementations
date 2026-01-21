@@ -333,25 +333,9 @@ namespace OwnTensor {
 
 
     // Specialization for fill with bool
+    // Specialization for fill with bool
     template<>
-    void Tensor::fill<bool>(bool value) {
-        if (dtype() != Dtype::Bool) {
-            throw std::runtime_error("Fill bool: dtype must be Bool");
-        }
-
-        uint8_t fill_value = value ? 1 : 0;
-
-        if (device().is_cpu()) {
-            uint8_t* data = reinterpret_cast<uint8_t*>(this->data());
-            std::memset(data, fill_value, numel());
-        } else {
-            // For GPU
-            std::vector<uint8_t> temp_data(numel(), fill_value);
-            device::copy_memory(data(), device().device,
-                            temp_data.data(), Device::CPU,
-                            numel() * sizeof(uint8_t));
-        }
-    }
+    void Tensor::fill<bool>(bool value);
 
     template<>
     inline void Tensor::set_data<float4_e2m1_t>(const float4_e2m1_t* source_data, size_t count)

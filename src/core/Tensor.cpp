@@ -963,4 +963,29 @@ template const complex128_t* Tensor::grad<complex128_t>() const;
         return new_tensor;
     }
 
+    // Specialization for fill with bool (Moved from header)
+    template<>
+    void Tensor::fill<bool>(bool value) {
+        if (dtype() != Dtype::Bool) {
+            throw std::runtime_error("Fill bool: dtype must be Bool");
+        }
+
+        uint8_t fill_value = value ? 1 : 0;
+
+        if (device().is_cpu()) {
+            uint8_t* data = reinterpret_cast<uint8_t*>(this->data());
+            std::memset(data, fill_value, numel());
+        } else {
+            // For GPU
+            #ifdef WITH_CUDA
+            std::vector<uint8_t> temp_data(numel(), fill_value);
+            device::copy_memory(data(), device().device,
+                            temp_data.data(), Device::CPU,
+                            numel() * sizeof(uint8_t));
+             #else
+             throw std::runtime_error("CUDA not enabled");
+             #endif
+        }
+    }
+
 } // namespace OwnTensor

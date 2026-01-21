@@ -23,38 +23,9 @@ LayerNorm::LayerNorm(int normalized_shape, float eps) : eps(eps) {
 }
 
 Tensor LayerNorm::forward(const Tensor& input) {
-    // LayerNorm: y = (x - mean) / sqrt(var + eps) * gamma + beta
-    // 
-    // This is a simplified global normalization implementation.
-    // For proper layer norm, we'd need axis-specific reductions.
-    // However, with broadcasting support in autograd ops, this should
-    // work as a basic layer normalization.
-    
-    // Step 1: Compute mean
-    Tensor mean_val = autograd::mean(input);
-    
-    // Step 2: Center the input (x - mean)
-    Tensor x_centered = autograd::sub(input, mean_val);
-    
-    // Step 3: Compute variance = mean(x_centered^2)
-    Tensor x_sq = autograd::mul(x_centered, x_centered);
-    Tensor var_val = autograd::mean(x_sq);
-    
-    // Step 4: Add eps for numerical stability using scalar addition
-    // Use non-autograd scalar op since eps is a constant
-    Tensor var_eps = var_val + eps;
-    
-    // Step 5: Compute std = sqrt(var + eps)
-    Tensor std_val = autograd::sqrt(var_eps);
-    
-    // Step 6: Normalize: x_centered / std
-    Tensor x_norm = autograd::div(x_centered, std_val);
-    
-    // Step 7: Apply affine transform: x_norm * weight + bias
-    Tensor scaled = autograd::mul(x_norm, weight);
-    Tensor output = autograd::add(scaled, bias);
-    
-    return output;
+    // Use Fused LayerNorm Op (CUDA Optimized)
+    int normalized_shape = weight.shape().dims[0];
+    return autograd::layer_norm(input, weight, bias, normalized_shape, eps);
 }
 
 std::vector<Tensor> LayerNorm::parameters() {

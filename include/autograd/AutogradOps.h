@@ -21,3 +21,4 @@
 #include "autograd/operations/ReshapeOps.h"
 #include "autograd/operations/LossOps.h"
 #include "autograd/operations/EmbeddingOps.h"
+#include "autograd/operations/NormalizationOps.h"

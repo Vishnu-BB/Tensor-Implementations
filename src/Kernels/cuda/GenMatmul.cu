@@ -4,16 +4,35 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <mma.h>
+#include <cublas_v2.h>
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
 #include <string>
+#include <mutex>
 
 #include "ops/Matmul.cuh"
 #include "core/Tensor.h"
 #include "core/TensorDispatch.h"
 
 namespace OwnTensor {
+
+// cuBLAS handle management - thread-safe singleton per device
+static std::mutex cublas_mutex;
+static cublasHandle_t g_cublas_handles[8] = {nullptr};
+
+static cublasHandle_t get_cublas_handle(int device = 0) {
+   if (g_cublas_handles[device] == nullptr) {
+      std::lock_guard<std::mutex> lock(cublas_mutex);
+      if (g_cublas_handles[device] == nullptr) {
+         cudaSetDevice(device);
+         cublasCreate(&g_cublas_handles[device]);
+         // Enable TF32 for FP32 matmuls - major speedup on Ampere+
+         cublasSetMathMode(g_cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH);
+      }
+   }
+   return g_cublas_handles[device];
+}
 
 using namespace nvcuda;
 
@@ -290,7 +309,45 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
    } else if constexpr (std::is_same<T, bfloat16_t>::value || std::is_same<T, __nv_bfloat16>::value) {
       matmul_bf16_optimized<128, 128, 32, 32, 32><<<dim3((N+127)/128, (M+127)/128, tb), 512, 0, stream>>>(reinterpret_cast<const __nv_bfloat16*>(ap), reinterpret_cast<const __nv_bfloat16*>(bp), reinterpret_cast<__nv_bfloat16*>(op), M, N, K, tb, meta);
    } else if constexpr (std::is_same<T, float>::value) {
-      matmul_fp32_optimized<128, 128, 16, 4, 4><<<dim3((N+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(ap, bp, op, M, N, K, tb, meta);
+      // Use cuBLAS for FP32 matmuls - enables TF32 Tensor Core acceleration
+      // Check if tensors are contiguous (row-major) for cuBLAS fast path
+      bool a_contiguous = (meta.a_strides[an-1] == 1);
+      bool b_contiguous = (meta.b_strides[bn-1] == 1);
+      bool out_contiguous = (meta.out_strides[on-1] == 1);
+      
+      // Use cuBLAS for 2D contiguous matrices (covers most Linear layer cases)
+      if (tb == 1 && a_contiguous && b_contiguous && out_contiguous && M >= 64 && N >= 64 && K >= 64) {
+         int current_device; cudaGetDevice(&current_device);
+         cublasHandle_t handle = get_cublas_handle(current_device);
+         cublasSetStream(handle, stream);
+         
+         // cuBLAS uses column-major, but for row-major C = A @ B, we compute:
+         // C^T = B^T @ A^T, which in column-major is: C[col-major] = B @ A
+         // So we swap A and B, and swap M and N
+         float alpha = 1.0f, beta = 0.0f;
+         int lda = meta.a_strides[an-2];  // Leading dim of A (row stride)
+         int ldb = meta.b_strides[bn-2];  // Leading dim of B (row stride)
+         int ldc = meta.out_strides[on-2]; // Leading dim of C (row stride)
+         
+         cublasStatus_t status = cublasGemmEx(
+            handle,
+            CUBLAS_OP_N, CUBLAS_OP_N,  // No transpose (see swap below)
+            N, M, K,                    // Swapped M and N for row-major
+            &alpha,
+            bp, CUDA_R_32F, ldb,        // B first (swap)
+            ap, CUDA_R_32F, lda,        // A second (swap)
+            &beta,
+            op, CUDA_R_32F, ldc,
+            CUBLAS_COMPUTE_32F_FAST_TF32,  // Use TF32 Tensor Cores!
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+         );
+         if (status != CUBLAS_STATUS_SUCCESS) {
+            throw std::runtime_error("cuBLAS GEMM failed with status: " + std::to_string(status));
+         }
+      } else {
+         // Fallback to custom kernel for strided/batched/small matrices
+         matmul_fp32_optimized<128, 128, 16, 4, 4><<<dim3((N+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(ap, bp, op, M, N, K, tb, meta);
+      }
    } else if constexpr (std::is_same<T, double>::value) {
       matmul_fp64_optimized<64, 64, 8, 4, 4><<<dim3((N+63)/64, (M+63)/64, tb), 256, 0, stream>>>(reinterpret_cast<const double*>(ap), reinterpret_cast<const double*>(bp), reinterpret_cast<double*>(op), M, N, K, tb, meta);
    }
