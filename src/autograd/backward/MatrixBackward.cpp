@@ -2,6 +2,9 @@
 #include "ops/TensorOps.h"
 #include "ops/Kernels.h"
 #include "ops/UnaryOps/Reduction.h"
+#ifdef WITH_CUDA
+#include "ops/MatmulBackward.cuh"
+#endif
 #include <stdexcept>
 #include <vector>
 
@@ -57,6 +60,47 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_a = grad_output @ b.T
     // grad_b = a.T @ grad_output
+    
+#ifdef WITH_CUDA
+    // Optimized CUDA path for Linear layer patterns
+    if (grad_output.is_cuda() && saved_b_.ndim() == 2) {
+        
+        // Case 1: Pure 2D matmul [M,K] @ [K,N]
+        if (saved_a_.ndim() == 2 && grad_output.ndim() == 2) {
+            Tensor grad_a(saved_a_.shape(), saved_a_.dtype(), saved_a_.device());
+            Tensor grad_b(saved_b_.shape(), saved_b_.dtype(), saved_b_.device());
+            cuda_matmul_backward(grad_output, saved_a_, saved_b_, grad_a, grad_b, 0);
+            return {grad_a, grad_b};
+        }
+        
+        // Case 2: Linear layer [B,T,Hidden] @ [Hidden,Out] -> [B,T,Out]
+        // Flatten to 2D, use optimized kernels, reshape back
+        if (saved_a_.ndim() > 2 && grad_output.ndim() == saved_a_.ndim()) {
+            int64_t hidden_dim = saved_a_.shape().dims.back();
+            int64_t output_dim = grad_output.shape().dims.back();
+            
+            // Flatten: [B,T,Hidden] -> [B*T, Hidden], [B,T,Out] -> [B*T, Out]
+            Tensor a_flat = saved_a_.reshape(Shape{{-1, hidden_dim}});
+            Tensor g_flat = grad_output.reshape(Shape{{-1, output_dim}});
+            
+            // grad_a_flat = g_flat @ B^T = [B*T, Out] @ [Out, Hidden] -> [B*T, Hidden]
+            // grad_b = a_flat^T @ g_flat = [Hidden, B*T] @ [B*T, Out] -> [Hidden, Out]
+            
+            Tensor grad_a_flat(a_flat.shape(), a_flat.dtype(), a_flat.device());
+            Tensor grad_b(saved_b_.shape(), saved_b_.dtype(), saved_b_.device());
+            
+            // Use optimized kernel on flattened 2D tensors
+            cuda_matmul_backward(g_flat, a_flat, saved_b_, grad_a_flat, grad_b, 0);
+            
+            // Reshape grad_a back to original shape
+            Tensor grad_a = grad_a_flat.reshape(saved_a_.shape());
+            
+            return {grad_a, grad_b};
+        }
+    }
+#endif
+    
+    // CPU/General CUDA path with explicit transpose
     Tensor b_t = saved_b_.t();
     
     Tensor grad_a = matmul(grad_output, b_t);
