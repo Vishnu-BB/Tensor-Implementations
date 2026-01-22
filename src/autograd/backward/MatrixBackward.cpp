@@ -100,6 +100,7 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
     }
 #endif
     
+    // TODO: CPU fallback
     // CPU/General CUDA path with explicit transpose
     Tensor b_t = saved_b_.t();
     

@@ -320,5 +320,359 @@ INSTANTIATE_FORWARD_GIVEN_T(double)
 INSTANTIATE_FORWARD_GIVEN_T(float16_t)
 INSTANTIATE_FORWARD_GIVEN_T(bfloat16_t)
 
+
+// ============================================================================
+// Categorical Cross Entropy Extensions
+// ============================================================================
+
+__global__ void cce_forward_kernel(
+    const float* __restrict__ predictions,
+    const float* __restrict__ targets,
+    float* __restrict__ losses, // [N]
+    int64_t batch_size,
+    int64_t num_classes
+) {
+    int64_t i = blockIdx.x; // One block per sample
+    if (i >= batch_size) return;
+
+    const float epsilon = 1e-7f;
+    const float one_minus_epsilon = 1.0f - 1e-7f;
+
+    const float* row_pred = predictions + i * num_classes;
+    const float* row_targ = targets + i * num_classes;
+
+    float sum = 0.0f;
+    for (int64_t j = threadIdx.x; j < num_classes; j += blockDim.x) {
+        float p = row_pred[j];
+        float t = row_targ[j];
+        
+        // Clip
+        if (p < epsilon) p = epsilon;
+        else if (p > one_minus_epsilon) p = one_minus_epsilon;
+        
+        sum += t * logf(p);
+    }
+    
+    extern __shared__ float sdata[];
+    unsigned int tid = threadIdx.x;
+    sdata[tid] = sum;
+    __syncthreads();
+    
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    
+    if (tid == 0) {
+        losses[i] = -sdata[0]; // Negate here (-sum is loss)
+    }
+}
+
+__global__ void scale_loss_kernel(float* val, float s) {
+    if (threadIdx.x == 0) *val *= s;
+}
+
+void categorical_cross_entropy_forward_cuda(
+    const float* predictions,
+    const float* targets,
+    float* loss_output,
+    int64_t batch_size,
+    int64_t num_classes
+) {
+    if (batch_size == 0) return;
+    
+    float* d_losses;
+    cudaMalloc(&d_losses, batch_size * sizeof(float));
+    
+    int threads = 256;
+    int blocks = batch_size;
+    
+    // 1. Per-sample loss
+    cce_forward_kernel<<<blocks, threads, threads * sizeof(float)>>>(
+        predictions, targets, d_losses, batch_size, num_classes);
+        
+    // 2. Reduce sum
+    int reduce_threads = 256;
+    int reduce_blocks = (batch_size + reduce_threads - 1) / reduce_threads;
+    
+    if (reduce_blocks == 1) {
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads * sizeof(float)>>>(
+            d_losses, loss_output, batch_size);
+    } else {
+        float* d_partial;
+        cudaMalloc(&d_partial, reduce_blocks * sizeof(float));
+         sum_reduction_kernel<float><<<reduce_blocks, reduce_threads, reduce_threads * sizeof(float)>>>(
+            d_losses, d_partial, batch_size);
+         sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads * sizeof(float)>>>(
+            d_partial, loss_output, reduce_blocks);
+        cudaFree(d_partial);
+    }
+    
+    // 3. Average (Divide by batch_size)
+    scale_loss_kernel<<<1, 1>>>(loss_output, 1.0f / static_cast<float>(batch_size));
+    
+    cudaFree(d_losses);
+}
+
+__global__ void cce_backward_kernel(
+    const float* __restrict__ grad_output, // scalar
+    const float* __restrict__ predictions,
+    const float* __restrict__ targets,
+    float* __restrict__ grad_input,
+    int64_t numel,
+    float scale // 1/N
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numel) return;
+    
+    const float epsilon = 1e-7f;
+    const float one_minus_epsilon = 1.0f - 1e-7f;
+    
+    float p = predictions[i];
+    float t = targets[i];
+    float g = *grad_output; // Access scalar gradient (assumed on GPU)
+    
+    float grad = 0.0f;
+    // d(log(clip(p))) = 1/clipped_p if not clamped, else 0
+    if (p >= epsilon && p <= one_minus_epsilon) {
+        grad = g * (-t / p);
+    }
+    
+    grad_input[i] = grad * scale;
+}
+
+void categorical_cross_entropy_backward_cuda(
+    const float* grad_output,
+    const float* predictions,
+    const float* targets,
+    float* grad_input,
+    int64_t batch_size,
+    int64_t num_classes
+) {
+    int64_t numel = batch_size * num_classes;
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    
+    cce_backward_kernel<<<blocks, threads>>>(
+        grad_output, predictions, targets, grad_input, numel, 1.0f / static_cast<float>(batch_size));
+}
+
+
+// ============================================================================
+// MSE / MAE / BCE Extensions
+// ============================================================================
+
+// --- MSE ---
+__global__ void mse_forward_kernel(
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ out,
+    int64_t n
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float diff = p[i] - t[i];
+    out[i] = diff * diff;
+}
+
+__global__ void mse_backward_kernel(
+    const float* __restrict__ grad_out,
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ grad_in,
+    int64_t n,
+    float scale
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float g = *grad_out; // scalar
+    float diff = p[i] - t[i];
+    grad_in[i] = 2.0f * diff * g * scale;
+}
+
+void mse_loss_forward_cuda(const float* predictions, const float* targets, float* loss_output, int64_t numel) {
+    if (numel == 0) return;
+    float* d_losses;
+    cudaMalloc(&d_losses, numel * sizeof(float));
+    
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    mse_forward_kernel<<<blocks, threads>>>(predictions, targets, d_losses, numel);
+    
+    // Reduce
+    int reduce_threads = 256;
+    int reduce_blocks = (numel + reduce_threads - 1) / reduce_threads;
+    
+    if (reduce_blocks == 1) {
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, loss_output, numel);
+    } else {
+        float* d_partial;
+        cudaMalloc(&d_partial, reduce_blocks * sizeof(float));
+        sum_reduction_kernel<float><<<reduce_blocks, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, d_partial, numel);
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_partial, loss_output, reduce_blocks);
+        cudaFree(d_partial);
+    }
+    
+    scale_loss_kernel<<<1, 1>>>(loss_output, 1.0f / static_cast<float>(numel));
+    cudaFree(d_losses);
+}
+
+void mse_loss_backward_cuda(const float* grad_output, const float* predictions, const float* targets, float* grad_input, int64_t numel) {
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    mse_backward_kernel<<<blocks, threads>>>(grad_output, predictions, targets, grad_input, numel, 1.0f/numel);
+}
+
+// --- MAE ---
+__global__ void mae_forward_kernel(
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ out,
+    int64_t n
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float diff = p[i] - t[i];
+    out[i] = fabsf(diff);
+}
+
+__global__ void mae_backward_kernel(
+    const float* __restrict__ grad_out,
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ grad_in,
+    int64_t n,
+    float scale
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float g = *grad_out;
+    float diff = p[i] - t[i];
+    float sign = (diff > 0.0f) ? 1.0f : ((diff < 0.0f) ? -1.0f : 0.0f);
+    grad_in[i] = sign * g * scale;
+}
+
+void mae_loss_forward_cuda(const float* predictions, const float* targets, float* loss_output, int64_t numel) {
+    if (numel == 0) return;
+    float* d_losses;
+    cudaMalloc(&d_losses, numel * sizeof(float));
+    
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    mae_forward_kernel<<<blocks, threads>>>(predictions, targets, d_losses, numel);
+    
+    // Reduce (same logic as MSE, could abstract but copy-paste is safer for now without templating spaghetti)
+    int reduce_threads = 256;
+    int reduce_blocks = (numel + reduce_threads - 1) / reduce_threads;
+    
+    if (reduce_blocks == 1) {
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, loss_output, numel);
+    } else {
+        float* d_partial;
+        cudaMalloc(&d_partial, reduce_blocks * sizeof(float));
+        sum_reduction_kernel<float><<<reduce_blocks, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, d_partial, numel);
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_partial, loss_output, reduce_blocks);
+        cudaFree(d_partial);
+    }
+    
+    scale_loss_kernel<<<1, 1>>>(loss_output, 1.0f / static_cast<float>(numel));
+    cudaFree(d_losses);
+}
+
+void mae_loss_backward_cuda(const float* grad_output, const float* predictions, const float* targets, float* grad_input, int64_t numel) {
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    mae_backward_kernel<<<blocks, threads>>>(grad_output, predictions, targets, grad_input, numel, 1.0f/numel);
+}
+
+// --- BCE ---
+__global__ void bce_forward_kernel(
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ out,
+    int64_t n
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    
+    float pi = p[i];
+    float ti = t[i];
+    
+    // Clip
+    const float eps = 1e-7f;
+    const float one_minus_eps = 1.0f - 1e-7f;
+    if (pi < eps) pi = eps;
+    else if (pi > one_minus_eps) pi = one_minus_eps;
+    
+    // Loss = -(t * log(p) + (1-t) * log(1-p))
+    out[i] = -(ti * logf(pi) + (1.0f - ti) * logf(1.0f - pi));
+}
+
+__global__ void bce_backward_kernel(
+    const float* __restrict__ grad_out,
+    const float* __restrict__ p,
+    const float* __restrict__ t,
+    float* __restrict__ grad_in,
+    int64_t n,
+    float scale
+) {
+    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    
+    float g = *grad_out;
+    float pi = p[i];
+    float ti = t[i];
+    
+    // Clip
+    const float eps = 1e-7f;
+    const float one_minus_eps = 1.0f - eps;
+    float p_clipped = pi;
+    if (p_clipped < eps) p_clipped = eps;
+    else if (p_clipped > one_minus_eps) p_clipped = one_minus_eps;
+    
+    // grad = (-t/p + (1-t)/(1-p)) * scale * g
+    // if clipped, grad might be 0 theoretically, but standard DL frameworks usually pass gradient through clipped values or use logits.
+    // Here we replicate strict derivative of the loss function formula with clipped p.
+    
+    float term1 = -ti / p_clipped;
+    float term2 = (1.0f - ti) / (1.0f - p_clipped);
+    grad_in[i] = (term1 + term2) * g * scale;
+}
+
+void bce_loss_forward_cuda(const float* predictions, const float* targets, float* loss_output, int64_t numel) {
+    if (numel == 0) return;
+    float* d_losses;
+    cudaMalloc(&d_losses, numel * sizeof(float));
+    
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    bce_forward_kernel<<<blocks, threads>>>(predictions, targets, d_losses, numel);
+    
+    // Reduce
+    int reduce_threads = 256;
+    int reduce_blocks = (numel + reduce_threads - 1) / reduce_threads;
+    
+    if (reduce_blocks == 1) {
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, loss_output, numel);
+    } else {
+        float* d_partial;
+        cudaMalloc(&d_partial, reduce_blocks * sizeof(float));
+        sum_reduction_kernel<float><<<reduce_blocks, reduce_threads, reduce_threads*sizeof(float)>>>(d_losses, d_partial, numel);
+        sum_reduction_kernel<float><<<1, reduce_threads, reduce_threads*sizeof(float)>>>(d_partial, loss_output, reduce_blocks);
+        cudaFree(d_partial);
+    }
+    
+    scale_loss_kernel<<<1, 1>>>(loss_output, 1.0f / static_cast<float>(numel));
+    cudaFree(d_losses);
+}
+
+void bce_loss_backward_cuda(const float* grad_output, const float* predictions, const float* targets, float* grad_input, int64_t numel) {
+    int threads = 256;
+    int blocks = (numel + threads - 1) / threads;
+    bce_backward_kernel<<<blocks, threads>>>(grad_output, predictions, targets, grad_input, numel, 1.0f/numel);
+}
+
 } // namespace cuda
 } // namespace OwnTensor

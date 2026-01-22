@@ -53,7 +53,26 @@ Tensor layer_norm(
             eps
         );
     } else {
-        // CPU Fallback (Simple OpenMP implementation)
+        // CUDA Bridge: Connection to run on CUDA if available
+#ifdef WITH_CUDA
+        try {
+            // Move to CUDA (Device 0)
+            DeviceIndex gpu_dev(Device::CUDA, 0);
+            Tensor x_cu = input.to(gpu_dev);
+            Tensor w_cu = (weight.is_valid()) ? weight.to(gpu_dev) : Tensor();
+            Tensor b_cu = (bias.is_valid()) ? bias.to(gpu_dev) : Tensor();
+            
+            // Execute on GPU
+            Tensor out_cu = layer_norm(x_cu, w_cu, b_cu, normalized_shape, eps);
+            
+            // Move back to original device (CPU)
+            return out_cu.to(input.device());
+        } catch (...) {
+            // Fallback to CPU execution if CUDA fails
+        }
+#endif
+        // CPU Fallback (OpenMP) 
+
         const float* x_ptr = input.data<float>();
         const float* gamma_ptr = (weight.is_valid()) ? weight.data<float>() : nullptr;
         const float* beta_ptr = (bias.is_valid()) ? bias.data<float>() : nullptr;

@@ -77,6 +77,7 @@ std::vector<Tensor> LayerNormBackward::apply(std::vector<Tensor>&& grads) {
         );
         
     } else {
+        // TODO: CPU fallback
         // CPU Fallback
         const float* gy_ptr = grad_output.data<float>();
         const float* x_ptr = input.data<float>();

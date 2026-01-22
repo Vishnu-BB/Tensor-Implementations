@@ -15,6 +15,20 @@ namespace OwnTensor {
 namespace autograd {
 
 Tensor mse_loss(const Tensor& predictions, const Tensor& targets) {
+    if (predictions.device().is_cuda() && predictions.dtype() == Dtype::Float32) {
+         Tensor result = Tensor::zeros(Shape{{1}}, TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()));
+         cuda::mse_loss_forward_cuda(predictions.data<float>(), targets.data<float>(), result.data<float>(), predictions.numel());
+         
+         if (predictions.requires_grad()) {
+             auto grad_fn = std::make_shared<MSELossBackward>(predictions, targets, predictions.numel());
+             Tensor& pred_mut = const_cast<Tensor&>(predictions);
+             grad_fn->set_next_edge(0, get_grad_edge(pred_mut));
+             result.set_grad_fn(grad_fn);
+             result.set_requires_grad(true);
+         }
+         return result;
+    }
+
     // Forward: mean((pred - target)^2)
     Tensor diff = predictions - targets;
     Tensor sq_diff = OwnTensor::pow(diff, 2, 0);
@@ -33,6 +47,20 @@ Tensor mse_loss(const Tensor& predictions, const Tensor& targets) {
 }
 
 Tensor mae_loss(const Tensor& predictions, const Tensor& targets) {
+    if (predictions.device().is_cuda() && predictions.dtype() == Dtype::Float32) {
+         Tensor result = Tensor::zeros(Shape{{1}}, TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()));
+         cuda::mae_loss_forward_cuda(predictions.data<float>(), targets.data<float>(), result.data<float>(), predictions.numel());
+         
+         if (predictions.requires_grad()) {
+             auto grad_fn = std::make_shared<MAELossBackward>(predictions, targets, predictions.numel());
+             Tensor& pred_mut = const_cast<Tensor&>(predictions);
+             grad_fn->set_next_edge(0, get_grad_edge(pred_mut));
+             result.set_grad_fn(grad_fn);
+             result.set_requires_grad(true);
+         }
+         return result;
+    }
+
     // Forward: mean(|pred - target|)
     Tensor diff = predictions - targets;
     Tensor abs_diff = OwnTensor::abs(diff, 0);
@@ -51,6 +79,20 @@ Tensor mae_loss(const Tensor& predictions, const Tensor& targets) {
 }
 
 Tensor binary_cross_entropy(const Tensor& predictions, const Tensor& targets) {
+    if (predictions.device().is_cuda() && predictions.dtype() == Dtype::Float32) {
+         Tensor result = Tensor::zeros(Shape{{1}}, TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()));
+         cuda::bce_loss_forward_cuda(predictions.data<float>(), targets.data<float>(), result.data<float>(), predictions.numel());
+         
+         if (predictions.requires_grad()) {
+             auto grad_fn = std::make_shared<BCELossBackward>(predictions, targets, predictions.numel());
+             Tensor& pred_mut = const_cast<Tensor&>(predictions);
+             grad_fn->set_next_edge(0, get_grad_edge(pred_mut));
+             result.set_grad_fn(grad_fn);
+             result.set_requires_grad(true);
+         }
+         return result;
+    }
+
     float epsilon_val = 1e-7f;
     Tensor epsilon = Tensor::full(predictions.shape(), 
         TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()), epsilon_val);
@@ -83,6 +125,30 @@ Tensor binary_cross_entropy(const Tensor& predictions, const Tensor& targets) {
 }
 
 Tensor categorical_cross_entropy(const Tensor& predictions, const Tensor& targets) {
+    if (predictions.device().is_cuda() && predictions.dtype() == Dtype::Float32) {
+         Tensor result = Tensor::zeros(Shape{{1}}, TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()));
+         
+         int64_t num_classes = predictions.shape().dims.back();
+         int64_t batch_size = predictions.numel() / num_classes;
+         
+         cuda::categorical_cross_entropy_forward_cuda(
+             predictions.data<float>(),
+             targets.data<float>(),
+             result.data<float>(),
+             batch_size, num_classes
+         );
+         
+         // Build graph if predictions require grad
+         if (predictions.requires_grad()) {
+             auto grad_fn = std::make_shared<CCELossBackward>(predictions, targets, predictions.numel());
+             Tensor& pred_mut = const_cast<Tensor&>(predictions);
+             grad_fn->set_next_edge(0, get_grad_edge(pred_mut));
+             result.set_grad_fn(grad_fn);
+             result.set_requires_grad(true);
+         }
+         return result;
+    }
+
     float epsilon_val = 1e-7f;
     Tensor epsilon = Tensor::full(predictions.shape(), 
         TensorOptions().with_dtype(predictions.dtype()).with_device(predictions.device()), epsilon_val);

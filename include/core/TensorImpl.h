@@ -377,6 +377,12 @@ public:
      * Release resources (called when refcount reaches 0)
      */
     void release_resources() override;
+
+    // ========================================================================
+    // Debugging / Memory Tracking
+    // ========================================================================
+    static std::atomic<int64_t> active_tensor_count_;
+    static int64_t get_active_count() { return active_tensor_count_.load(); }
 };
 
 } // namespace OwnTensor

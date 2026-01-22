@@ -26,8 +26,15 @@ std::vector<Tensor> ReluBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     
     // grad_input = grad_output * (input > 0)
-    Tensor mask = saved_input_ > 0.0f;
-    Tensor grad_input = grad_output * mask;
+    // grad_input = grad_output * (input > 0)
+    Tensor grad_input;
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32) {
+         grad_input = Tensor(saved_input_.shape(), grad_output.opts());
+         cuda::relu_backward_cuda(grad_output.data<float>(), saved_input_.data<float>(), grad_input.data<float>(), grad_input.numel());
+    } else {
+         Tensor mask = saved_input_ > 0.0f;
+         grad_input = grad_output * mask;
+    }
     
     return {grad_input};
 }
@@ -63,6 +70,7 @@ std::vector<Tensor> GeLUBackward::apply(std::vector<Tensor>&& grads) {
         return {grad_input};
     }
     
+    // TODO: CPU fallback
     // Fallback to tensor ops for CPU or non-float32
     // GeLU derivative:
     // gelu(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
@@ -105,7 +113,13 @@ std::vector<Tensor> SigmoidBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_x = grad_out * sigmoid(x) * (1 - sigmoid(x))
     // We saved sigmoid(x) as saved_output_
-    Tensor grad_x = grad_output * saved_output_ * (1.0f - saved_output_);
+    Tensor grad_x;
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32) {
+         grad_x = Tensor(saved_output_.shape(), grad_output.opts());
+         cuda::sigmoid_backward_cuda(grad_output.data<float>(), saved_output_.data<float>(), grad_x.data<float>(), grad_x.numel());
+    } else {
+         grad_x = grad_output * saved_output_ * (1.0f - saved_output_);
+    }
     
     return {grad_x};
 }
@@ -126,9 +140,21 @@ std::vector<Tensor> SoftmaxBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& s = saved_output_;  // softmax output
     
     // Softmax backward: grad_x = s * (grad_out - sum(grad_out * s, dim))
-    Tensor gs = grad_output * s;
-    Tensor sum_gs = reduce_sum(gs, {dim_}, true);
-    Tensor grad_x = s * (grad_output - sum_gs);
+    Tensor grad_x;
+    int64_t ndim = s.ndim();
+    int64_t d = dim_ < 0 ? dim_ + ndim : dim_;
+    
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32 && d == ndim - 1) {
+         grad_x = Tensor(s.shape(), grad_output.opts());
+         int64_t cols = s.shape().dims.back();
+         int64_t rows = s.numel() / cols;
+         
+         cuda::softmax_backward_cuda(grad_output.data<float>(), s.data<float>(), grad_x.data<float>(), rows, cols);
+    } else {
+         Tensor gs = grad_output * s;
+         Tensor sum_gs = reduce_sum(gs, {dim_}, true);
+         grad_x = s * (grad_output - sum_gs);
+    }
     
     return {grad_x};
 }

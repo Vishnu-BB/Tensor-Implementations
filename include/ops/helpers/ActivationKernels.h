@@ -42,5 +42,17 @@ void fused_bias_gelu_cuda(
     int64_t hidden_dim   // Size of bias vector
 );
 
+// ReLU
+void relu_forward_cuda(const float* input, float* output, int64_t numel);
+void relu_backward_cuda(const float* grad_output, const float* input, float* grad_input, int64_t numel);
+
+// Sigmoid
+void sigmoid_forward_cuda(const float* input, float* output, int64_t numel);
+void sigmoid_backward_cuda(const float* grad_output, const float* output, float* grad_input, int64_t numel);
+
+// Softmax (along last dimension)
+void softmax_forward_cuda(const float* input, float* output, int64_t rows, int64_t cols);
+void softmax_backward_cuda(const float* grad_output, const float* output, float* grad_input, int64_t rows, int64_t cols);
+
 } // namespace cuda
 } // namespace OwnTensor

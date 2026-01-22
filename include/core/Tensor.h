@@ -165,9 +165,12 @@ namespace OwnTensor
         bool is_cuda() const;
 
         Tensor to_bool() const;
+        Tensor pin_memory() const; //✨✨✨
         //#######################################################
         // Memory Info
         //#######################################################
+        
+        static int64_t get_active_tensor_count() { return TensorImpl::get_active_count(); }
 
         size_t nbytes() const;
         size_t grad_nbytes() const;

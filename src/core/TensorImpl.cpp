@@ -6,6 +6,12 @@
 namespace OwnTensor {
 
 // ============================================================================
+// Static Initialization
+// ============================================================================
+
+std::atomic<int64_t> TensorImpl::active_tensor_count_{0};
+
+// ============================================================================
 // Constructors
 // ============================================================================
 
@@ -24,6 +30,7 @@ TensorImpl::TensorImpl(Storage&& storage,
       device_(device),
       base_impl_(std::move(base_impl)) {
     // autograd_meta_ is nullptr - lazy allocation
+    active_tensor_count_++;
 }
 
 TensorImpl::TensorImpl(const Shape& shape,
@@ -57,14 +64,15 @@ TensorImpl::TensorImpl(const Shape& shape,
     // Compute strides
     stride_ = ViewUtils::compute_strides(shape);
     
-    // Create autograd metadata if requires_grad
     if (requires_grad) {
         autograd_meta_ = std::make_unique<AutogradMeta>(true);
     }
+    active_tensor_count_++;
 }
 
 TensorImpl::~TensorImpl() {
     release_resources();
+    active_tensor_count_--;
 }
 
 // ============================================================================

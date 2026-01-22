@@ -25,17 +25,22 @@ std::vector<Tensor> MSELossBackward::apply(std::vector<Tensor>&& grads) {
     
     const Tensor& grad_output = grads[0];
     
-    // grad_pred = 2 * (pred - target) / numel * grad_output
-    Tensor diff = saved_pred_ - saved_target_;
-    float scale = 2.0f / static_cast<float>(numel_);
-    
-    // Get scalar grad_output value
-    float grad_val = 1.0f;
-    if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+    // TODO: Fused kernel needed (AUTOGRAD RELATED ONLY)
+    Tensor grad_pred;
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32) {
+         grad_pred = Tensor(saved_pred_.shape(), grad_output.opts());
+         const Tensor& g_out = (grad_output.device().is_cpu()) ? grad_output.to(saved_pred_.device()) : grad_output;
+         cuda::mse_loss_backward_cuda(g_out.data<float>(), saved_pred_.data<float>(), saved_target_.data<float>(), grad_pred.data<float>(), numel_);
+    } else {
+         float scale = 2.0f / static_cast<float>(numel_);
+         float grad_val = 1.0f;
+         if (grad_output.numel() == 1) {
+             grad_val = *grad_output.data<float>();
+         }
+
+         Tensor diff = saved_pred_ - saved_target_;
+         grad_pred = diff * (scale * grad_val);
     }
-    
-    Tensor grad_pred = diff * (scale * grad_val);
     
     return {grad_pred};
 }
@@ -54,26 +59,30 @@ std::vector<Tensor> MAELossBackward::apply(std::vector<Tensor>&& grads) {
     
     const Tensor& grad_output = grads[0];
     
-    // grad_pred = sign(pred - target) / numel * grad_output
-    Tensor diff = saved_pred_ - saved_target_;
-    Tensor zero = Tensor::zeros(diff.shape(), 
-        TensorOptions().with_dtype(diff.dtype()).with_device(diff.device()));
-    Tensor ones = Tensor::ones(diff.shape(),
-        TensorOptions().with_dtype(diff.dtype()).with_device(diff.device()));
-    Tensor neg_ones = ones * -1.0f;
-    
-    // sign(x) = 1 if x > 0, -1 if x < 0, 0 if x == 0
-    Tensor sign_diff = where(diff > zero, ones, where(diff < zero, neg_ones, zero));
-    
-    float scale = 1.0f / static_cast<float>(numel_);
-    
-    // Get scalar grad_output value
-    float grad_val = 1.0f;
-    if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+    // TODO: Fused kernel needed (AUTOGRAD RELATED ONLY)
+    Tensor grad_pred;
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32) {
+         grad_pred = Tensor(saved_pred_.shape(), grad_output.opts());
+         const Tensor& g_out = (grad_output.device().is_cpu()) ? grad_output.to(saved_pred_.device()) : grad_output;
+         cuda::mae_loss_backward_cuda(g_out.data<float>(), saved_pred_.data<float>(), saved_target_.data<float>(), grad_pred.data<float>(), numel_);
+    } else {
+         float scale = 1.0f / static_cast<float>(numel_);
+         float grad_val = 1.0f;
+         if (grad_output.numel() == 1) {
+             grad_val = *grad_output.data<float>();
+         }
+
+         Tensor diff = saved_pred_ - saved_target_;
+         Tensor zero = Tensor::zeros(diff.shape(), 
+             TensorOptions().with_dtype(diff.dtype()).with_device(diff.device()));
+         Tensor ones = Tensor::ones(diff.shape(),
+             TensorOptions().with_dtype(diff.dtype()).with_device(diff.device()));
+         Tensor neg_ones = ones * -1.0f;
+         
+         // sign(x) = 1 if x > 0, -1 if x < 0, 0 if x == 0
+         Tensor sign_diff = where(diff > zero, ones, where(diff < zero, neg_ones, zero));
+         grad_pred = sign_diff * (scale * grad_val);
     }
-    
-    Tensor grad_pred = sign_diff * (scale * grad_val);
     
     return {grad_pred};
 }
@@ -94,21 +103,26 @@ std::vector<Tensor> BCELossBackward::apply(std::vector<Tensor>&& grads) {
     
     // BCE: L = -mean(target * log(pred) + (1-target) * log(1-pred))
     // grad_pred = (-target/pred + (1-target)/(1-pred)) / numel
-    Tensor ones = Tensor::ones(saved_pred_.shape(),
-        TensorOptions().with_dtype(saved_pred_.dtype()).with_device(saved_pred_.device()));
-    
-    Tensor term1 = saved_target_ / saved_pred_ * -1.0f;
-    Tensor term2 = (ones - saved_target_) / (ones - saved_pred_);
-    
-    float scale = 1.0f / static_cast<float>(numel_);
-    
-    // Get scalar grad_output value
-    float grad_val = 1.0f;
-    if (grad_output.numel() == 1) {
-        grad_val = *grad_output.data<float>();
+    // TODO: Fused kernel needed (AUTOGRAD RELATED ONLY)
+    Tensor grad_pred;
+    if (grad_output.device().is_cuda() && grad_output.dtype() == Dtype::Float32) {
+         grad_pred = Tensor(saved_pred_.shape(), grad_output.opts());
+         const Tensor& g_out = (grad_output.device().is_cpu()) ? grad_output.to(saved_pred_.device()) : grad_output;
+         cuda::bce_loss_backward_cuda(g_out.data<float>(), saved_pred_.data<float>(), saved_target_.data<float>(), grad_pred.data<float>(), numel_);
+    } else {
+         float scale = 1.0f / static_cast<float>(numel_);
+         float grad_val = 1.0f;
+         if (grad_output.numel() == 1) {
+             grad_val = *grad_output.data<float>();
+         }
+
+         Tensor ones = Tensor::ones(saved_pred_.shape(),
+             TensorOptions().with_dtype(saved_pred_.dtype()).with_device(saved_pred_.device()));
+         
+         Tensor term1 = saved_target_ / saved_pred_ * -1.0f;
+         Tensor term2 = (ones - saved_target_) / (ones - saved_pred_);
+         grad_pred = (term1 + term2) * (scale * grad_val);
     }
-    
-    Tensor grad_pred = (term1 + term2) * (scale * grad_val);
     
     return {grad_pred};
 }
@@ -129,6 +143,23 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
     
     // CCE: L = -mean(sum(target * log(pred), dim=1))
     // grad_pred = -target / pred / numel
+    if (saved_pred_.device().is_cuda() && saved_pred_.dtype() == Dtype::Float32) {
+         Tensor grad_pred = Tensor::zeros(saved_pred_.shape(), saved_pred_.opts());
+         int64_t num_classes = saved_pred_.shape().dims.back();
+         int64_t batch_size = saved_pred_.numel() / num_classes;
+         
+         const Tensor& g_out = (grad_output.device().is_cpu()) ? grad_output.to(saved_pred_.device()) : grad_output;
+         
+         cuda::categorical_cross_entropy_backward_cuda(
+             g_out.data<float>(),
+             saved_pred_.data<float>(),
+             saved_target_.data<float>(),
+             grad_pred.data<float>(),
+             batch_size, num_classes
+         );
+         return {grad_pred};
+    }
+
     Tensor grad_pred = saved_target_ / saved_pred_ * -1.0f;
     
     float scale = 1.0f / static_cast<float>(numel_);

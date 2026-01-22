@@ -45,5 +45,79 @@ void sparse_cross_entropy_backward_cuda(
     cudaStream_t stream
 );
 
+// Categorical Cross Entropy (Targets are probabilities [N, C])
+// Forward: loss = -1/N * sum(target * log(clip(pred)))
+void categorical_cross_entropy_forward_cuda(
+    const float* predictions,
+    const float* targets,
+    float* loss_output,
+    int64_t batch_size,
+    int64_t num_classes
+);
+
+// Backward: grad = -1/N * grad_output * target / pred
+void categorical_cross_entropy_backward_cuda(
+    const float* grad_output,
+    const float* predictions,
+    const float* targets,
+    float* grad_input,
+    int64_t batch_size,
+    int64_t num_classes
+);
+
+// MSE Loss
+// Forward: loss = mean((pred - target)^2)
+void mse_loss_forward_cuda(
+    const float* predictions,
+    const float* targets,
+    float* loss_output,
+    int64_t numel
+);
+
+// Backward: grad = 2/N * (pred - target) * grad_output
+void mse_loss_backward_cuda(
+    const float* grad_output,
+    const float* predictions,
+    const float* targets,
+    float* grad_input,
+    int64_t numel
+);
+
+// MAE Loss
+// Forward: loss = mean(|pred - target|)
+void mae_loss_forward_cuda(
+    const float* predictions,
+    const float* targets,
+    float* loss_output,
+    int64_t numel
+);
+
+// Backward: grad = 1/N * sign(pred - target) * grad_output
+void mae_loss_backward_cuda(
+    const float* grad_output,
+    const float* predictions,
+    const float* targets,
+    float* grad_input,
+    int64_t numel
+);
+
+// Binary Cross Entropy (BCE)
+// Forward: loss = -mean(target * log(clip(pred)) + (1-target) * log(1-clip(pred)))
+void bce_loss_forward_cuda(
+    const float* predictions,
+    const float* targets,
+    float* loss_output,
+    int64_t numel
+);
+
+// Backward: grad = 1/N * (-target/pred + (1-target)/(1-pred)) * grad_output
+void bce_loss_backward_cuda(
+    const float* grad_output,
+    const float* predictions,
+    const float* targets,
+    float* grad_input,
+    int64_t numel
+);
+
 } // namespace cuda
 } // namespace OwnTensor

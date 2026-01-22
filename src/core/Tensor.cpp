@@ -9,6 +9,7 @@
 #include "device/AllocatorRegistry.h"
 #include "device/DeviceTransfer.h"
 #include "device/Device.h"
+#include "device/PinnedCPUAllocator.h"
 #include "core/Views/ViewUtils.h"
 #include "ops/helpers/ConditionalOps.h"
 #include "dtype/DtypeTraits.h"
@@ -543,6 +544,53 @@ namespace OwnTensor
 
     Tensor Tensor::to_cuda(int device_index) const {
         return to(DeviceIndex(Device::CUDA, device_index));
+    }
+
+    Tensor Tensor::pin_memory() const {
+        if (!impl_) {
+            throw std::runtime_error("pin_memory: tensor is not initialized");
+        }
+
+        // If active device is CUDA, typically we return the tensor as-is (PyTorch behavior)
+        // or a copy. PyTorch's pin_memory() on CUDA tensor does nothing (returns self).
+        if (is_cuda()) {
+            return *this;
+        }
+
+        // Check if already using pinned allocator? 
+        // We can't easily check unless we store Allocator type or check pointer range.
+        // For now, always re-allocate to be safe and ensure it IS pinned.
+        
+        // Ensure contiguous
+        Tensor self_contig = is_contiguous() ? *this : contiguous();
+        
+        Allocator* pinned_alloc = AllocatorRegistry::get_pinned_cpu_allocator();
+        size_t nbytes_val = self_contig.nbytes();
+
+        // Create Storage with Pinned Allocator
+        Storage storage(nbytes_val, self_contig.dtype(), DeviceIndex(Device::CPU), pinned_alloc);
+
+        // Create TensorImpl with Pinned Storage
+        auto pinned_impl = make_intrusive<TensorImpl>(
+            std::move(storage),
+            self_contig.shape(),
+            self_contig.stride(),
+            0,
+            self_contig.dtype(),
+            DeviceIndex(Device::CPU)
+        );
+
+        Tensor pinned_tensor(pinned_impl);
+        
+        // Copy data (CPU -> CPU Pinned) using standard copy or pinned memcpy
+        // pinned_alloc->memcpy can use cudaMemcpyHostToHost but standard copy is fine?
+        // Let's use standard copy via copy_memory or just memcpy.
+        // We already have a fast way:
+        if (nbytes_val > 0) {
+            std::memcpy(pinned_tensor.data(), self_contig.data(), nbytes_val);
+        }
+        
+        return pinned_tensor;        
     }
 
     bool Tensor::is_cpu() const {
