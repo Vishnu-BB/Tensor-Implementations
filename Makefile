@@ -9,13 +9,27 @@ LIBDIR := lib
 TARGET_A := $(LIBDIR)/libtensor.a
 TARGET_SO := $(LIBDIR)/libtensor.so
 
-CPPFLAGS = -Iinclude -I/usr/local/cuda/include -DWITH_CUDA 
-CXXFLAGS = -std=c++20 -fPIC -Wall -Wextra -O3 -g -fopenmp
-NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -O3 -g --expt-relaxed-constexpr
+# =============================================================================
+# CUDA auto-detection (Ubuntu + Arch portable)
+# =============================================================================
+CUDA_NVCC := $(shell which nvcc 2>/dev/null)
+
+ifeq ($(CUDA_NVCC),)
+$(error nvcc not found. CUDA toolkit is not installed or not in PATH)
+endif
+
+CUDA_ROOT := $(shell dirname $(shell dirname $(CUDA_NVCC)))
+CUDA_INC  := $(CUDA_ROOT)/include
+CUDA_LIB  := $(CUDA_ROOT)/lib64
+
+
+CPPFLAGS = -Iinclude -I$(CUDA_INC) -DWITH_CUDA 
+CXXFLAGS = -std=c++20 -fPIC -Wall -Wextra -g -fopenmp
+NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g --expt-relaxed-constexpr
 
 RPATH = -Xlinker -rpath -Xlinker '$$ORIGIN/lib'
-LDFLAGS = -L/usr/local/cuda/lib64 -L$(LIBDIR) $(RPATH)
-LDLIBS = -lcudart -ltbb -lcurand -lcublas
+LDFLAGS = -L$(CUDA_LIB) -L$(LIBDIR) $(RPATH)
+LDLIBS = -lcudart -ltbb -lcurand
 
 # =============================================================================
 # File Discovery (Automatic)
