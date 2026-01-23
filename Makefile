@@ -29,7 +29,7 @@ NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g --expt-relaxed-constexp
 
 RPATH = -Xlinker -rpath -Xlinker '$$ORIGIN/lib'
 LDFLAGS = -L$(CUDA_LIB) -L$(LIBDIR) $(RPATH)
-LDLIBS = -lcudart -ltbb -lcurand
+LDLIBS = -lcudart -ltbb -lcurand -lcublas
 
 # =============================================================================
 # File Discovery (Automatic)

@@ -237,6 +237,7 @@ public:
     int64_t storage_offset() const { return storage_offset_; }
     Dtype dtype() const { return dtype_; }
     DeviceIndex device() const { return device_; }
+    void set_device(DeviceIndex device);
     
     /**
      * Get total number of elements in tensor

@@ -121,6 +121,11 @@ const void* TensorImpl::data() const {
     return base_ptr + (storage_offset_ * elem_size);
 }
 
+void TensorImpl::set_device(DeviceIndex new_device)
+{
+    this->device_ = new_device;
+}
+
 // ============================================================================
 // Autograd Methods
 // ============================================================================
