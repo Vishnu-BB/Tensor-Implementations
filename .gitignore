@@ -55,3 +55,6 @@ CUDA_Computation_Tests
 currently_working_on/
 misc_files/
 ImplLogs/
+Data-Parallel-DP/
+data2/
+
