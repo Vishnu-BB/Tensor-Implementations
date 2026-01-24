@@ -13,8 +13,6 @@
 
 using namespace OwnTensor;
 
-// --- Helper Functions for Binary I/O ---
-
 Tensor load_tensor(const std::string& filename, std::ifstream& f) {
     if (!f.is_open()) throw std::runtime_error("File not open");
 
