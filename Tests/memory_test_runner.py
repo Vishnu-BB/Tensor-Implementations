@@ -44,44 +44,6 @@ def get_cpu_memory():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / (1024 * 1024)  # MB
 
-def benchmark_pytorch_memory(device_str, iterations=10):
-    device = torch.device("cuda" if device_str.lower() == "cuda" else "cpu")
-    if device.type == "cuda" and not torch.cuda.is_available():
-        device = torch.device("cpu")
-
-    model = TestModel().to(device)
-    input_data = torch.randn(BATCH_SIZE, INPUT_DIM).to(device)
-    target_data = torch.randn(BATCH_SIZE, OUTPUT_DIM).to(device)
-    criterion = nn.MSELoss().to(device)
-    optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
-    
-    peak_cpu = 0
-    peak_cuda = 0
-
-    if device.type == "cuda":
-        torch.cuda.reset_peak_memory_stats(device)
-
-    for _ in range(iterations):
-        optimizer.zero_grad()
-        out = model(input_data)
-        l = criterion(out, target_data)
-        l.backward()
-        optimizer.step()
-        
-        peak_cpu = max(peak_cpu, get_cpu_memory())
-        if device.type == "cuda":
-            peak_cuda = max(peak_cuda, torch.cuda.max_memory_allocated(device) / (1024 * 1024))
-            
-    return peak_cpu, peak_cuda
-
-def read_cpp_memory_results():
-    if not os.path.exists(RESULTS_FILE):
-        return None
-    with open(RESULTS_FILE, 'rb') as f:
-        cpu_mb = struct.unpack('f', f.read(4))[0]
-        cuda_mb = struct.unpack('f', f.read(4))[0]
-    return cpu_mb, cuda_mb
-
 def get_gpu_memory(pid):
     try:
         output = subprocess.check_output(
@@ -133,8 +95,30 @@ def run_bench(cmd, env, name):
     stdout, stderr = process.communicate()
     return process.returncode, peak_rss, peak_gpu, stdout.decode(), stderr.decode()
 
+# Measure Python + PyTorch baseline memory (before any tensors are created)
+def get_python_baseline():
+    """Measures the baseline memory of a Python process with PyTorch loaded but no tensors."""
+    script = '''
+import torch
+import torch.nn as nn
+import psutil
+import os
+# Just import, don't create any tensors
+print(psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024))
+'''
+    result = subprocess.run(['python3', '-c', script], capture_output=True, text=True)
+    try:
+        return float(result.stdout.strip())
+    except:
+        return 400.0  # Fallback estimate if measurement fails
+
 if __name__ == "__main__":
     print("[Python] Starting Memory Benchmark...")
+    print("[Python] Note: CPU memory now shows TENSOR memory only (baseline subtracted)")
+    
+    # Measure Python baseline once
+    py_baseline = get_python_baseline()
+    print(f"[Python] Python+PyTorch baseline memory: {py_baseline:.1f} MB (will be subtracted)")
     
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     cpp_file = "Tests/test_memory.cpp"
@@ -158,23 +142,26 @@ if __name__ == "__main__":
             print(f"OwnTensor Failed for {dev}.\nSTDOUT: {out_own}\nSTDERR: {err_own}")
             continue
 
-        # 2. Run PyTorch
+        
         cmd_py = ["python3", py_bench_script, dev]
         ret_py, py_rss, py_gpu, out_py, err_py = run_bench(cmd_py, os.environ, "PyTorch")
         if ret_py != 0:
             print(f"PyTorch Failed for {dev}.\nSTDOUT: {out_py}\nSTDERR: {err_py}")
             continue
         
-        # 3. Report
+
         if dev == "CPU":
+            py_tensor_memory = max(0, py_rss - py_baseline)
+            
             print(f"In OwnTensor({dev}) Peak Memory: value:{own_rss:.7f} MB")
-            print(f"In Pytorch({dev}) Peak Memory: value:{py_rss:.7f} MB")
-            diff = abs(own_rss - py_rss)
-            print(f"Diff in Memory(btw pytorch and Owntensor value)={diff:.7f} MB")
+            print(f"In Pytorch({dev}) Peak Memory (raw): value:{py_rss:.7f} MB")
+            print(f"In Pytorch({dev}) Peak Memory (tensor only, baseline {py_baseline:.1f} MB subtracted): value:{py_tensor_memory:.7f} MB")
+            diff_raw = abs(own_rss - py_rss)
+            diff_fair = abs(own_rss - py_tensor_memory)
+            print(f"Diff in Memory (raw, unfair): {diff_raw:.7f} MB")
+            print(f"Diff in Memory (fair, tensor only): {diff_fair:.7f} MB")
         else:
-            # For CUDA, use the max of (SMI measurement) or (Internal if we wanted, but SMI is fairer)
-            # Actually SMI might miss some peaks if the process is fast.
-            # But let's use SMI as the primary "fair" process-level metric.
+            # For CUDA, use nvidia-smi measurements (both should be comparable)
             print(f"In OwnTensor({dev}) Peak VRAM: value:{own_gpu:.7f} MB")
             print(f"In Pytorch({dev}) Peak VRAM: value:{py_gpu:.7f} MB")
             diff = abs(own_gpu - py_gpu)

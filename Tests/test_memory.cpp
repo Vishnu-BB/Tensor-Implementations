@@ -19,7 +19,6 @@
 
 using namespace OwnTensor;
 
-// --- Helper Functions for Memory Measurement ---
 
 long get_peak_rss() {
     struct rusage usage;
@@ -38,7 +37,6 @@ size_t get_cuda_used_memory() {
 #endif
 }
 
-// --- Helper Functions for Binary I/O (same as test_accuracy.cpp) ---
 
 Tensor load_tensor(const std::string& filename, std::ifstream& f) {
     if (!f.is_open()) throw std::runtime_error("File not open");
