@@ -140,7 +140,13 @@ public:
      * Warning: existing data will be deallocated
      */
     void set_data_ptr(DataPtr new_ptr);
+
     
+    void set_device(DeviceIndex device);
+
+    void set_allocator(Allocator* alloc);
+
+
     /**
      * Reset storage to uninitialized state
      */

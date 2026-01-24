@@ -484,18 +484,38 @@ namespace OwnTensor
             throw std::runtime_error("inplace to_cpu_: tensor is not initialized");
         }
 
-        if (this->device().device == impl_->device().device && device().index == impl_->device().index) {
-            return ;
+        if (this->device().is_cpu()) {
+            return;
         }
 
-        // auto* new_ptr = new uint8_t[this->nbytes()];
-        Allocator* cpu_alloc = AllocatorRegistry::get_cpu_allocator();
+        Allocator* cpu_alloc = AllocatorRegistry::get_allocator(Device::CPU);
+        if (!cpu_alloc) {
+             throw std::runtime_error("to_cpu_: Failed to get CPU allocator");
+        }
+
         void* new_ptr = cpu_alloc->allocate(this->nbytes());
+        if (!new_ptr) {
+             throw std::runtime_error("to_cpu_: Failed to allocate memory on CPU");
+        }
 
-        device::copy_memory(new_ptr, Device::CPU, this->data(), this->device().device, this->nbytes());
-        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter());
+        try {
+            device::copy_memory(new_ptr, Device::CPU, this->data(), this->device().device, this->nbytes());
+        } catch (...) {
+            cpu_alloc->deallocate(new_ptr);
+            throw;
+        }
 
+        // this->impl_->storage().data_ptr().reset();
+
+        // Create DataPtr with proper deleter that uses the allocator
+        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cpu_alloc));
+
+        // Update Storage: This frees old memory and sets new one
         this->impl_->mutable_storage().set_data_ptr(std::move(data_));
+        this->impl_->mutable_storage().set_device(DeviceIndex(Device::CPU));
+        this->impl_->mutable_storage().set_allocator(cpu_alloc);
+        
+        // Update TensorImpl metadata
         this->impl_->set_device(DeviceIndex(Device::CPU));
     }
 
@@ -505,20 +525,49 @@ namespace OwnTensor
 
     void Tensor::to_cuda_(int device_index) {
         if (!impl_) {
-            throw std::runtime_error("inplace to_cuda_: tensor is not initialized");
+             throw std::runtime_error("inplace to_cuda_: tensor is not initialized");
         }
 
-        if (this->device().device == impl_->device().device && device().index == impl_->device().index) {
+        DeviceIndex target_device(Device::CUDA, device_index);
+
+        if (this->device().is_cuda() && this->device().index == device_index) {
             return;
         }
 
-        Allocator* cuda_alloc = AllocatorRegistry::get_cuda_allocator();
+        #ifdef WITH_CUDA
+        if (!device::cuda_available()) {
+            throw std::runtime_error("CUDA is not available");
+        }
+
+        Allocator* cuda_alloc = AllocatorRegistry::get_allocator(Device::CUDA);
+        if (!cuda_alloc) {
+             throw std::runtime_error("to_cuda_: Failed to get CUDA allocator");
+        }
+        
+        // Ensure we are on the right device for allocation/copy if needed (allocator handles it usually)
+        
         void* new_ptr = cuda_alloc->allocate(this->nbytes());
-        device::copy_memory(new_ptr, Device::CUDA, this->data(), this->device().device, this->nbytes());
-        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter());
+        if (!new_ptr) {
+             throw std::runtime_error("to_cuda_: Failed to allocate memory on CUDA");
+        }
+
+        try {
+            device::copy_memory(new_ptr, Device::CUDA, this->data(), this->device().device, this->nbytes());
+        } catch (...) {
+            cuda_alloc->deallocate(new_ptr);
+            throw;
+        }
+
+        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cuda_alloc));
 
         this->impl_->mutable_storage().set_data_ptr(std::move(data_));
-        this->impl_->set_device(DeviceIndex(Device::CUDA, 0));
+        this->impl_->mutable_storage().set_device(target_device);
+        this->impl_->mutable_storage().set_allocator(cuda_alloc);
+
+        this->impl_->set_device(target_device);
+        #else
+        throw std::runtime_error("CUDA support not compiled");
+        #endif
     }
 
     Tensor Tensor::pin_memory() const {

@@ -198,14 +198,19 @@ namespace OwnTensor
             size_t shard_offset_elems =
                 this->storage_offset() + i * shard_elems;  // ELEMENT offset
             Shape shard_shape = Shape({ {1, (int64_t)shard_elems} });
-            Tensor shard(                    // shared storage
+            // Storage shard_storage = this->impl_->mutable_storage();
+
+            intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(         
+                this->impl_->mutable_storage(),            // shared storage
                 Shape(shard_shape),
-                // ViewUtils::compute_strides(shard_shape),
-                // static_cast<int64_t>(shard_offset_elems * dtype_size(this->dtype())),   // view offset
+                ViewUtils::compute_strides(shard_shape),
+                static_cast<int64_t>(shard_offset_elems * dtype_size(this->dtype())),   // view offset
                 this->dtype(),
                 this->device(),
-                false
+                intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
             );
+
+            Tensor shard(std::move(shard_impl));
 
             shards.push_back(std::move(shard));
         }
@@ -290,15 +295,19 @@ namespace OwnTensor
 
             // Calculate byte offset: (Current Element Offset * Bytes Per Element)
             size_t byte_offset = shard_offset_elems * dtype_size(this->dtype());
+            // Storage shard_storage = this->impl_->storage();
 
-            Tensor shard(                   
+            intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(  
+                this->impl_->mutable_storage(),
                 shard_shape,
-                // ViewUtils::compute_strides(shard_shape),
-                // byte_offset,   
+                ViewUtils::compute_strides(shard_shape),
+                int64_t(byte_offset),   
                 this->dtype(),
                 this->device(),
-                this->requires_grad()
+                intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
             );
+
+            Tensor shard(std::move(shard_impl));
 
             // Increment the tracker by the number of elements in the shard just created
             shard_offset_elems += shard.numel();
