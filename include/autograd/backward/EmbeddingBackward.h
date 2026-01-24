@@ -25,6 +25,8 @@ public:
     
     std::string name() const override { return "EmbeddingBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    
+    void release_saved_variables() override { saved_indices_.reset(); }
 };
 
 } // namespace autograd

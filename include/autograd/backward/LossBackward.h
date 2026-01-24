@@ -97,6 +97,11 @@ public:
     
     std::string name() const override { return "SparseCrossEntropyLossBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    
+    void release_saved_variables() override {
+        saved_logits_ = Tensor();
+        saved_targets_ = Tensor();
+    }
 };
 
 } // namespace autograd

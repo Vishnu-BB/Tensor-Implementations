@@ -21,6 +21,7 @@ public:
     
     std::string name() const override { return "AddBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_a_ = Tensor(); saved_b_ = Tensor(); }
 };
 
 /**
@@ -39,6 +40,7 @@ public:
     
     std::string name() const override { return "MulBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_a_ = Tensor(); saved_b_ = Tensor(); }
 };
 
 /**
@@ -56,6 +58,7 @@ public:
     
     std::string name() const override { return "SubBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_a_ = Tensor(); saved_b_ = Tensor(); }
 };
 
 /**
@@ -74,6 +77,7 @@ public:
     
     std::string name() const override { return "DivBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_a_ = Tensor(); saved_b_ = Tensor(); }
 };
 
 } // namespace autograd

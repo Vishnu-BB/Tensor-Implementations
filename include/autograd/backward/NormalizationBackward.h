@@ -26,6 +26,13 @@ public:
     }
 
     virtual std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    
+    void release_saved_variables() override {
+        input_.reset();
+        mean_.reset();
+        rstd_.reset();
+        weight_.reset();
+    }
 
 private:
     SavedVariable input_;
