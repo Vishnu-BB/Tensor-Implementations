@@ -267,6 +267,16 @@ public:
         next_edges_.clear();
     }
     
+    /**
+     * @brief Release saved variables to free memory after backward.
+     * 
+     * Override in subclasses to reset any SavedVariable members.
+     * Called by the autograd engine after apply() to prevent memory accumulation.
+     */
+    virtual void release_saved_variables() {
+        // Default: do nothing. Subclasses should override.
+    }
+    
     // =========================================================================
     // Graph Information
     // =========================================================================

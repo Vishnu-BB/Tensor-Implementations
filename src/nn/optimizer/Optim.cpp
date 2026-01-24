@@ -175,9 +175,13 @@ void Adam::zero_grad() {
 
 float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_type, bool error_if_nonfinite) {
     // FAST GPU-based gradient clipping using fused CUDA kernels
+    // - Persistent buffers (allocated once, reused)
     // - Single accumulator for all parameters
-    // - No tensor allocations in the loop
     // - Vectorized scaling
+    
+    // Persistent GPU buffers - allocated once, never freed (tiny size, acceptable leak)
+    static float* s_d_norm = nullptr;
+    static float* s_d_clip_coef = nullptr;
     
     bool is_cuda = false;
     
@@ -194,12 +198,16 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_t
     bool is_inf_norm = std::isinf(norm_type);
     
     if (is_cuda) {
-        // GPU PATH: Use fused CUDA kernels
+        // GPU PATH: Use fused CUDA kernels with persistent buffers
         
-        // Allocate single accumulator on GPU
-        float* d_norm;
-        cudaMalloc(&d_norm, sizeof(float));        // why is this even added??
-        cudaMemset(d_norm, 0, sizeof(float));        // why is this even added??
+        // Lazy allocation of persistent buffers (one-time cost)
+        if (!s_d_norm) {
+            cudaMalloc(&s_d_norm, sizeof(float));
+            cudaMalloc(&s_d_clip_coef, sizeof(float));
+        }
+        
+        // Reset accumulator (async, no sync needed)
+        cudaMemsetAsync(s_d_norm, 0, sizeof(float));
         
         // Accumulate norms from all gradients
         for (auto* param : params) {
@@ -211,13 +219,13 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_t
                     if (is_inf_norm) {
                         cuda::grad_norm_inf_cuda(
                             grad.data<float>(),
-                            d_norm,
+                            s_d_norm,
                             grad.numel()
                         );
                     } else {
                         cuda::grad_norm_squared_cuda(
                             grad.data<float>(),
-                            d_norm,
+                            s_d_norm,
                             grad.numel()
                         );
                     }
@@ -227,12 +235,8 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_t
             }
         }
         
-        // Allocate GPU memory for clip coefficient
-        float* d_clip_coef;
-        cudaMalloc(&d_clip_coef, sizeof(float));
-        
         // Compute clip coefficient on GPU (also computes sqrt for L2 norm)
-        cuda::compute_clip_coef_cuda(d_norm, d_clip_coef, max_norm, is_inf_norm);
+        cuda::compute_clip_coef_cuda(s_d_norm, s_d_clip_coef, max_norm, is_inf_norm);
         
         // Scale all gradients using GPU-resident clip coefficient
         for (auto* param : params) {
@@ -243,7 +247,7 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_t
                 if (grad.device().is_cuda() && grad.dtype() == Dtype::Float32) {
                     cuda::scale_gradients_with_gpu_coef_cuda(
                         grad.data<float>(),
-                        d_clip_coef,
+                        s_d_clip_coef,
                         grad.numel()
                     );
                 }
@@ -254,10 +258,9 @@ float clip_grad_norm_(std::vector<Tensor*>& params, float max_norm, float norm_t
         
         // Only now copy the total_norm to CPU for return value
         float total_norm;
-        cudaMemcpy(&total_norm, d_norm, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&total_norm, s_d_norm, sizeof(float), cudaMemcpyDeviceToHost);
         
-        cudaFree(d_clip_coef);
-        cudaFree(d_norm);
+        // No cudaFree - buffers are persistent
 
         if (error_if_nonfinite && (std::isnan(total_norm) || std::isinf(total_norm))) {
              throw std::runtime_error("The total norm of gradients from `parameters` is non-finite, so it cannot be clipped. To disable this error and scale the gradients by the non-finite norm anyway, set `error_if_nonfinite=False`");

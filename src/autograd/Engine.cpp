@@ -121,6 +121,9 @@ void backward(const Tensor& root, const Tensor* grad_output) {
     }
     
     grad_map[root_fn.get()] = {root_grad};
+    
+    // OPTIMIZATION: Reserve typical capacity for grad vectors to avoid reallocations
+    grad_map.reserve(nodes.size());
 
     // Process nodes in topological order
     for (const auto& node : nodes) {
@@ -142,6 +145,12 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         // Apply backward function (operator() handles hooks)
         std::vector<Tensor> input_grads = (*node_ptr)({grad});
         
+        // MEMORY OPTIMIZATION: Release saved variables after backward to free memory
+        node_ptr->release_saved_variables();
+        
+        // Also clear the processed grads to free them
+        it->second.clear();
+        
         // Distribute gradients to next edges
         const auto& edges = node_ptr->next_edges();
         for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
@@ -150,7 +159,9 @@ void backward(const Tensor& root, const Tensor* grad_output) {
             }
             
             auto next_fn = edges[i].function;
-            grad_map[next_fn.get()].push_back(input_grads[i]);
+            auto& vec = grad_map[next_fn.get()];
+            if (vec.empty()) vec.reserve(2);  // Pre-reserve for typical case
+            vec.push_back(input_grads[i]);
         }
     }
         for (auto& [node_ptr, grads] : grad_map) {

@@ -191,11 +191,15 @@ std::vector<Tensor> SparseCrossEntropyLossBackward::apply(std::vector<Tensor>&& 
     
     const Tensor& grad_output = grads[0];
     
-    // Get scalar grad_output value - must transfer to CPU if on CUDA
+    // Get scalar grad_output value efficiently
     float grad_val = 1.0f;
     if (grad_output.numel() == 1) {
-        Tensor grad_cpu = grad_output.device().is_cpu() ? grad_output : grad_output.to_cpu();
-        grad_val = *grad_cpu.data<float>();
+        if (grad_output.device().is_cpu()) {
+            grad_val = *grad_output.data<float>();
+        } else {
+            // Read scalar directly from GPU - single cudaMemcpy is faster than tensor copy
+            cudaMemcpy(&grad_val, grad_output.data<float>(), sizeof(float), cudaMemcpyDeviceToHost);
+        }
     }
     
     // Handle both 2D [N, C] and 3D [B, T, C] logits
@@ -301,7 +305,7 @@ std::vector<Tensor> SparseCrossEntropyLossBackward::apply(std::vector<Tensor>&& 
             throw std::runtime_error("SparseCrossEntropyLossBackward: only Float32 supported for CUDA");
         }
         
-        cudaDeviceSynchronize();
+        // No sync needed - kernel will complete before next operation uses grad_logits_2d
         #else
         throw std::runtime_error("CUDA not available but tensor is on CUDA device");
         #endif

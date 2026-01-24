@@ -21,6 +21,7 @@ public:
     
     std::string name() const override { return "ReluBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_input_ = Tensor(); }
 };
 
 /**
@@ -38,6 +39,7 @@ public:
     
     std::string name() const override { return "GeLUBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_input_ = Tensor(); }
 };
 
 /**
@@ -55,6 +57,7 @@ public:
     
     std::string name() const override { return "SigmoidBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_output_ = Tensor(); }
 };
 
 /**
@@ -73,6 +76,7 @@ public:
     
     std::string name() const override { return "SoftmaxBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override { saved_output_ = Tensor(); }
 };
 
 } // namespace autograd

@@ -293,11 +293,11 @@ Tensor sparse_cross_entropy_loss(const Tensor& logits, const Tensor& targets) {
             throw std::runtime_error("sparse_cross_entropy_loss: only Float32 supported for CUDA forward pass");
         }
         
-        cudaDeviceSynchronize();
-        
-        // Transfer result to CPU to get scalar value
-        Tensor loss_cpu = loss_tensor.to_cpu();
-        total_loss = loss_cpu.data<float>()[0];
+        // No sync needed - loss stays on GPU, gets transferred to CPU only when needed for logging
+        // Read loss value directly for the result tensor (will sync at cudaMemcpy)
+        float h_loss;
+        cudaMemcpy(&h_loss, loss_tensor.data<float>(), sizeof(float), cudaMemcpyDeviceToHost);
+        total_loss = h_loss;
         #else
         throw std::runtime_error("CUDA not available but tensor is on CUDA device");
         #endif

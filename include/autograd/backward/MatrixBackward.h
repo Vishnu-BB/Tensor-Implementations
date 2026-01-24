@@ -22,6 +22,11 @@ public:
     
     std::string name() const override { return "MatmulBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    
+    void release_saved_variables() override {
+        saved_a_ = Tensor();  // Release reference
+        saved_b_ = Tensor();
+    }
 };
 
 } // namespace autograd
