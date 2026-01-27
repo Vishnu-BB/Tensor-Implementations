@@ -31,11 +31,11 @@ public:
     virtual ~intrusive_ptr_target() = default;
     
     void add_ref() const {
-        ++refcount_;
+        refcount_.fetch_add(1, std::memory_order_relaxed);
     }
     
     void release() const {
-        if (--refcount_ == 0) {
+        if (refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             delete this;
         }
     }

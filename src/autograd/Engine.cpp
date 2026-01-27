@@ -3,108 +3,144 @@
 #include "core/AutogradMeta.h"
 #include "core/TensorImpl.h"
 #include "ops/TensorOps.h"
+#include "utils/ThreadPool.h"
 #include <algorithm>
 #include <unordered_set>
+#include <unordered_map>
 #include <queue>
 #include <stdexcept>
-#include<iostream>
+#include <iostream>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+
 namespace OwnTensor {
 namespace autograd {
 
-void build_topo_recursive(Node* node, std::unordered_set<Node*>& visited, std::vector<std::shared_ptr<Node>>& result) {
-    if (visited.count(node)) return;
-    visited.insert(node);
+// =============================================================================
+// Gradient Vector Pool
+// =============================================================================
+class GradientVectorPool {
+    std::vector<std::vector<Tensor>> pool_;
+    std::mutex mutex_;
     
-    // Visit inputs (next edges)
-    for (const auto& edge : node->next_edges()) {
-        if (edge.is_valid()) {
-            build_topo_recursive(edge.function.get(), visited, result);
-        }
+public:
+    static GradientVectorPool& instance() {
+        static GradientVectorPool pool;
+        return pool;
     }
-    
-    // Post-order add to result (leaves first) -> Wait, we want topological order for Backward.
-    // Backward needs: if Node A inputs to Node B, process B then A? 
-    // No. In Backward: Root (Loss) -> ... -> Leaf.
-    // If A takes B as input in forward. Forward: B -> A.
-    // Backward: A -> B.
-    // So we need to process A before B.
-    // This means Topological Sort of the Backward Graph.
-    // Backward Graph edges: A -> B.
-    // Standard DFS Post-Order gives Reverse Topological Sort.
-    // So if we push_back in post-order, we satisfy dependency if we read backwards?
-    // Let's trace:
-    // Visit A. Calls B. Visit B. B finishes. Push B. A finishes. Push A.
-    // Result: [B, A].
-    // Dependency: A -> B (A passes grad to B).
-    // So we need to process A, then B.
-    // So we need [A, B].
-    // This is Reverse Post-Order.
-    // So we just reverse the result vector? Or push_front (slow).
-    // Or just read vector in reverse?
-    // `Engine` iterates `nodes` forward.
-    // So `nodes` should be [A, B].
-    // So we need Reverse result of Post-Order DFS.
-}
 
+    std::vector<Tensor> acquire() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!pool_.empty()) {
+            std::vector<Tensor> vec = std::move(pool_.back());
+            pool_.pop_back();
+            return vec;
+        }
+        std::vector<Tensor> vec;
+        vec.reserve(4);
+        return vec;
+    }
+
+    void release(std::vector<Tensor>&& vec) {
+        vec.clear();
+        std::lock_guard<std::mutex> lock(mutex_);
+        pool_.push_back(std::move(vec));
+    }
+};
+
+// =============================================================================
+// Topological Sort (Optimized)
+// =============================================================================
 std::vector<std::shared_ptr<Node>> topological_sort(const Tensor& root) {
     std::vector<std::shared_ptr<Node>> result;
     std::unordered_set<Node*> visited;
-    
     auto root_fn = root.grad_fn();
     if (!root_fn) return result;
     
-    // DFS
-    // We need to capture shared_ptrs to keep nodes alive?
-    // The graph holds shared_ptrs.
-    // DFS traverses raw pointers but we need to store shared_ptr in result.
-    // We can't get shared_ptr from raw pointer easily without `shared_from_this`.
-    // Node inherits `enable_shared_from_this`.
-    
-    // Helper lambda to handle shared_ptr
-    // std::function must handle recursion
+    // Iterative Post-Order DFS
     std::vector<std::shared_ptr<Node>> stack;
-    // Iterative DFS to avoid recursion depth issues? (Depth ~100 is fine).
-    // But how to get shared_ptr from Node* in 'visited'?
-    // Just pass shared_ptr to recursive function.
     
-    // Re-declare to use helper
-    std::unordered_set<Node*> visited_set;
-    
-    // Standard DFS Post-Order
-    // We need a helper that takes shared_ptr
-    struct DFS {
-        static void run(std::shared_ptr<Node> node, std::unordered_set<Node*>& visited, std::vector<std::shared_ptr<Node>>& out) {
-            if (visited.count(node.get())) return;
-            visited.insert(node.get());
-            
-            for (const auto& edge : node->next_edges()) {
-                if (edge.is_valid()) {
-                    run(edge.function, visited, out);
-                }
-            }
-            out.push_back(node);
-        }
+    struct Frame {
+        std::shared_ptr<Node> node;
+        size_t next_edge_idx = 0;
     };
     
-    DFS::run(root_fn, visited_set, result);
+    std::vector<Frame> call_stack;
+    if (root_fn) {
+        call_stack.push_back({root_fn, 0});
+        visited.insert(root_fn.get());
+    }
     
-    // result is now [Leaf, ..., Root]. We need [Root, ..., Leaf].
+    while (!call_stack.empty()) {
+        auto& frame = call_stack.back();
+        auto node = frame.node;
+        
+        bool pushed_child = false;
+        const auto& edges = node->next_edges();
+        
+        while (frame.next_edge_idx < edges.size()) {
+            const auto& edge = edges[frame.next_edge_idx];
+            frame.next_edge_idx++;
+            
+            if (edge.is_valid()) {
+                if (visited.find(edge.function.get()) == visited.end()) {
+                    visited.insert(edge.function.get());
+                    call_stack.push_back({edge.function, 0});
+                    pushed_child = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!pushed_child) {
+            result.push_back(node);
+            call_stack.pop_back();
+        }
+    }
+    
     std::reverse(result.begin(), result.end());
-    
     return result;
 }
 
+// =============================================================================
+// Backward Engine
+// =============================================================================
+
+// Execution State for a single node
+struct NodeTask {
+    std::mutex mutex;
+    std::vector<Tensor> input_grads;
+    int dependencies = 0;
+    bool scheduled = false;
+
+    NodeTask() {
+        input_grads.reserve(2); 
+    }
+};
+
+// Shared Context for the entire Backward Pass
+struct BackwardContext {
+    std::mutex state_mutex;
+    std::condition_variable cv;
+    std::atomic<int> active_tasks{0};
+    
+    // Map Node* -> NodeTask
+    // Access to this map is read-only during execution
+    std::unordered_map<Node*, std::unique_ptr<NodeTask>> graph_tasks;
+    
+    // Thread Pool (Static)
+    // We refer to utils::ThreadPool
+};
+
 void backward(const Tensor& root, const Tensor* grad_output) {
-    // Validate
     if (!root.requires_grad()) {
         throw std::runtime_error("backward: tensor does not require gradients");
     }
-    
-    // For scalar tensors, grad_output can be omitted
-    bool is_scalar = root.ndim() == 0 || root.numel() == 1;
-    
-    // Initialize root gradient
+
+    // 1. Initialize Root Gradient
     Tensor root_grad;
+    bool is_scalar = root.ndim() == 0 || root.numel() == 1;
     if (grad_output) {
         root_grad = *grad_output;
     } else if (is_scalar) {
@@ -112,27 +148,17 @@ void backward(const Tensor& root, const Tensor* grad_output) {
             .with_dtype(root.dtype())
             .with_device(root.device()));
     } else {
-        throw std::runtime_error(
-            "backward: grad_output must be specified for non-scalar tensors");
+        throw std::runtime_error("backward: non-scalar requires grad_output");
     }
-    
-    // Topological sort
-    auto nodes = topological_sort(root);
-    
-    // Gradient accumulation map
-    std::unordered_map<Node*, std::vector<Tensor>> grad_map;
-    
-    // Initialize root gradient
+
     auto root_fn = root.grad_fn();
-    if (root_fn) {
-        grad_map[root_fn.get()] = {root_grad};
-    } else {
-        // Root is a leaf - accumulate directly
-        if (root.unsafeGetTensorImpl()->has_autograd_meta()) {
+    
+    // Handle Leaf Root case
+    if (!root_fn) {
+         if (root.unsafeGetTensorImpl()->has_autograd_meta()) {
             auto* meta = static_cast<AutogradMeta*>(
                 root.unsafeGetTensorImpl()->autograd_meta());
             if (meta->has_grad()) {
-                // Accumulate
                 Tensor& existing_grad = meta->mutable_grad(root.unsafeGetTensorImpl());
                 Tensor new_grad = operator+(existing_grad, root_grad);
                 meta->set_grad(new_grad);
@@ -142,73 +168,205 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         }
         return;
     }
-    
-    // grad_map[root_fn.get()] = {root_grad};
-    
-    // OPTIMIZATION: Reserve typical capacity for grad vectors to avoid reallocations
-    grad_map.reserve(nodes.size());
 
-    // Process nodes in topological order
-    for (const auto& node : nodes) {
-        Node* node_ptr = node.get();
+    // 2. Discover Graph and Helper Setup
+    auto ctx = std::make_shared<BackwardContext>();
+    std::vector<Node*> bfs_queue;
+    
+    bfs_queue.push_back(root_fn.get());
+    ctx->graph_tasks[root_fn.get()] = std::make_unique<NodeTask>();
+    
+    size_t head = 0;
+    while(head < bfs_queue.size()) {
+        Node* node = bfs_queue[head++];
         
-        // Check if this node has any gradients to process
-        auto it = grad_map.find(node_ptr);
-        if (it == grad_map.end() || it->second.empty()) {
-            continue;  // No gradients for this node
-        }
-        
-        // Sum all gradients for this node
-        auto& node_grads = it->second;
-        Tensor grad = node_grads[0];
-        for (size_t i = 1; i < node_grads.size(); ++i) {
-            grad = operator+(grad, node_grads[i]);
-        }
-        
-        // Apply backward function (operator() handles hooks)
-        std::vector<Tensor> input_grads = (*node_ptr)({grad});
-        
-        // MEMORY OPTIMIZATION: Release saved variables after backward to free memory
-        node_ptr->release_saved_variables();
-        
-        // Also clear the processed grads to free them
-        it->second.clear();
-        
-        // Distribute gradients to next edges
-        const auto& edges = node_ptr->next_edges();
-        for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
-            if (!edges[i].is_valid()) {
-                continue;
+        for (const auto& edge : node->next_edges()) {
+            if (edge.is_valid()) {
+                Node* next_node = edge.function.get();
+                
+                auto& task = ctx->graph_tasks[next_node];
+                if (!task) {
+                    task = std::make_unique<NodeTask>();
+                    bfs_queue.push_back(next_node);
+                }
+                task->dependencies++;
             }
-            
-            auto next_fn = edges[i].function;
-            auto& vec = grad_map[next_fn.get()];
-            if (vec.empty()) vec.reserve(2);  // Pre-reserve for typical case
-            vec.push_back(input_grads[i]);
         }
     }
-        for (auto& [node_ptr, grads] : grad_map) {
-        if (grads.empty()) continue;
+
+    // 3. Execution Setup
+    static utils::ThreadPool thread_pool(std::thread::hardware_concurrency());
+    
+    // Seed root gradient
+    {
+        auto& task = ctx->graph_tasks[root_fn.get()];
+        task->input_grads.push_back(root_grad);
+    }
+    
+    // 4. Task Function
+    // We define a recursive lambda, but with shared_ptr context
+    // We can't capture the lambda itself easily with std::function in this scope without leakage of logic.
+    // Instead we define a standalone helper or a lambda that captures context.
+    
+    std::function<void(Node*)> process_node;
+    process_node = [ctx, &process_node](Node* node) {
+        // Retrieve Task
+        NodeTask* task = ctx->graph_tasks.at(node).get();
         
-        // Check if already processed (was in nodes list)
-        bool was_processed = false;
-        for (const auto& node : nodes) {
-            if (node.get() == node_ptr) {
-                was_processed = true;
-                break;
+        Tensor grad;
+        {
+            std::lock_guard<std::mutex> lock(task->mutex);
+            // Sum Gradients
+            if (!task->input_grads.empty()) {
+                 grad = task->input_grads[0];
+                 for (size_t i = 1; i < task->input_grads.size(); ++i) {
+                     grad = operator+(grad, task->input_grads[i]);
+                 }
+                 task->input_grads.clear();
             }
         }
         
-        if (!was_processed) {
-            // Sum gradients
-            Tensor grad = grads[0];
-            for (size_t i = 1; i < grads.size(); ++i) {
-                grad = operator+(grad, grads[i]);
-            }
-            // Apply (this calls GradAccumulator::apply which sets grad_ in AutogradMeta)
-            // operator() handles any node-level hooks registered on GradAccumulator
-            (*node_ptr)({grad});
+        if (grad.is_valid()) {
+            std::vector<Tensor> input_grads = (*node)({grad});
+            node->release_saved_variables();
+            
+            const auto& edges = node->next_edges();
+            
+            for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
+                if (!edges[i].is_valid()) continue;
+                
+                Node* next_node = edges[i].function.get();
+                Tensor& out_grad = input_grads[i];
+                
+                NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
+                
+                bool ready = false;
+                {
+                    std::lock_guard<std::mutex> lock(next_task->mutex);
+                    if (out_grad.is_valid()) {
+                       next_task->input_grads.push_back(std::move(out_grad));
+                    }
+                    next_task->dependencies--;
+                    if (next_task->dependencies == 0 && !next_task->scheduled) {
+                        next_task->scheduled = true;
+                        ready = true;
+                    }
+                }
+                
+                if (ready) {
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->state_mutex);
+                        ctx->active_tasks++;
+                    }
+                    // Capture ctx by value (shared_ptr copy)
+                    // Capture process_node by value (std::function copy)
+                    // Note: capturing process_node by reference is WRONG for async.
+                    // But process_node is a local std::function. 
+                    // WE NEED TO SOLVE THE RECURSION CAPTURE.
+                    // Standard fix: pass context to thread, and context contains the logic?
+                    // Or simply: Capturing `process_node` by value works if `std::function` supports it.
+                    // Checks: `std::function` is copyable.
+                    // But `process_node` captures `process_node` by reference...
+                    // Loop: `process_node` -> `reference to process_node`.
+                    // If we copy `process_node`, the copy refers to the original stack variable!
+                    // DANGER!
+                    
+                    // FIX: Make the lambda standalone, not capturing itself.
+                    // Pass the lambda/functor as an argument to itself?
+                    // Or define a struct functor.
+                }
+            } 
         }
+        
+        // Finish
+        {
+            std::lock_guard<std::mutex> lk(ctx->state_mutex);
+            ctx->active_tasks--;
+        }
+        ctx->cv.notify_all();
+    };
+    
+    // IMPLEMENTATION OF SAFE RECURSIVE TASK
+    struct TaskFunctor {
+        std::shared_ptr<BackwardContext> ctx;
+        Node* node;
+        
+        void operator()() {
+            // fprintf(stderr, "DEBUG: Executing Node %s\n", node->name().c_str());
+            NodeTask* task = ctx->graph_tasks.at(node).get();
+            
+            Tensor grad;
+            {
+                std::lock_guard<std::mutex> lock(task->mutex);
+                if (!task->input_grads.empty()) {
+                     grad = task->input_grads[0];
+                     for (size_t i = 1; i < task->input_grads.size(); ++i) {
+                         grad = operator+(grad, task->input_grads[i]);
+                     }
+                     task->input_grads.clear();
+                }
+            }
+            
+            if (grad.is_valid()) {
+                std::vector<Tensor> input_grads = (*node)({grad});
+                node->release_saved_variables();
+                
+                const auto& edges = node->next_edges();
+                for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
+                    if (!edges[i].is_valid()) continue;
+                    
+                    Node* next_node = edges[i].function.get();
+                    Tensor& out_grad = input_grads[i];
+                    
+                    NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
+                    bool ready = false;
+                    {
+                        std::lock_guard<std::mutex> lock(next_task->mutex);
+                         if (out_grad.is_valid()) {
+                           next_task->input_grads.push_back(std::move(out_grad));
+                        }
+                        next_task->dependencies--;
+                        if (next_task->dependencies == 0 && !next_task->scheduled) {
+                            next_task->scheduled = true;
+                            ready = true;
+                        }
+                    }
+                    
+                    if (ready) {
+                        schedule(ctx, next_node);
+                    }
+                }
+            }
+            
+            
+            // Atomic decrement
+            int remaining = --ctx->active_tasks;
+            if (remaining == 0) {
+                 std::lock_guard<std::mutex> lk(ctx->state_mutex);
+                 ctx->cv.notify_all();
+            }
+        }
+        
+        static void schedule(std::shared_ptr<BackwardContext> ctx, Node* node) {
+            ctx->active_tasks++;
+            // Enqueue a fresh TaskFunctor
+            static utils::ThreadPool& pool = get_pool();
+            pool.enqueue(TaskFunctor{ctx, node});
+        }
+        
+        static utils::ThreadPool& get_pool() {
+             static utils::ThreadPool pool(std::thread::hardware_concurrency());
+             return pool;
+        }
+    };
+    
+    // Kickoff
+    TaskFunctor::schedule(ctx, root_fn.get());
+    
+    // Wait
+    {
+        std::unique_lock<std::mutex> lk(ctx->state_mutex);
+        ctx->cv.wait(lk, [&] { return ctx->active_tasks.load() == 0; });
     }
 }
 

@@ -2,6 +2,7 @@
 #include "core/Tensor.h"
 #include "core/TensorImpl.h"
 #include "autograd/Hooks.h"
+#include "ops/TensorOps.h" // Needed for operator+
 #include <stdexcept>
 
 namespace OwnTensor {
@@ -91,6 +92,23 @@ const Tensor& AutogradMeta::grad() const {
 void AutogradMeta::set_grad(const Tensor& new_grad) {
     std::lock_guard<std::mutex> lock(mutex_);
     grad_ = std::make_unique<Tensor>(new_grad);
+}
+
+void AutogradMeta::set_grad(Tensor&& new_grad) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    grad_ = std::make_unique<Tensor>(std::move(new_grad));
+}
+
+void AutogradMeta::accumulate_grad(Tensor&& update) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!grad_) {
+        grad_ = std::make_unique<Tensor>(std::move(update));
+    } else {
+        // Accumulate: *grad_ = *grad_ + update;
+        // Optimization: if we could do inplace add, that would be better.
+        // But for now, just reduce the locking overhead.
+        *grad_ = operator+(*grad_, update);
+    }
 }
 
 void AutogradMeta::trigger_post_acc_hooks(const Tensor& grad) {

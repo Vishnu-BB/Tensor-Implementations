@@ -245,9 +245,19 @@ struct AutogradMeta : public AutogradMetaInterface {
     void clear_hooks();
 
     /**
-     * @brief Set gradient tensor.
+     * @brief Set gradient tensor (copy).
      */
     void set_grad(const Tensor& new_grad);
+
+    /**
+     * @brief Set gradient tensor (move).
+     */
+     void set_grad(Tensor&& new_grad);
+
+    /**
+     * @brief Accumulate gradient (sum += update) in a single locked step.
+     */
+    void accumulate_grad(Tensor&& update);
 
     /**
      * @brief Check if gradient exists.
