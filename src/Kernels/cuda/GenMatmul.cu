@@ -27,8 +27,8 @@ static cublasHandle_t get_cublas_handle(int device = 0) {
       if (g_cublas_handles[device] == nullptr) {
          cudaSetDevice(device);
          cublasCreate(&g_cublas_handles[device]);
-         // Enable TF32 for FP32 matmuls - major speedup on Ampere+
-         cublasSetMathMode(g_cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH);
+         // Disable TF32 for FP32 matmuls to improve stability
+         cublasSetMathMode(g_cublas_handles[device], CUBLAS_DEFAULT_MATH);
       }
    }
    return g_cublas_handles[device];
@@ -404,7 +404,7 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
                 ap, CUDA_R_32F, lda,
                 &beta,
                 op, CUDA_R_32F, ldc,
-                CUBLAS_COMPUTE_32F_FAST_TF32,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
              );
          } else {
@@ -418,7 +418,7 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
                 &beta,
                 op, CUDA_R_32F, ldc, stride_c,
                 tb,
-                CUBLAS_COMPUTE_32F_FAST_TF32,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
              );
          }

@@ -27,8 +27,8 @@ static cublasHandle_t get_cublas_handle_bwd(int device = 0) {
       if (g_cublas_handles_bwd[device] == nullptr) {
          cudaSetDevice(device);
          cublasCreate(&g_cublas_handles_bwd[device]);
-         // Enable TF32 for FP32 matmuls - major speedup on Ampere+
-         cublasSetMathMode(g_cublas_handles_bwd[device], CUBLAS_TF32_TENSOR_OP_MATH);
+         // Disable TF32 for FP32 matmuls to improve stability
+         cublasSetMathMode(g_cublas_handles_bwd[device], CUBLAS_DEFAULT_MATH);
       }
    }
    return g_cublas_handles_bwd[device];
@@ -473,10 +473,10 @@ void launch_backward_matmul(
 
           cublasStatus_t status;
           if (tb == 1) {
-             status = cublasGemmEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, go_ptr, CUDA_R_32F, ldgo, &beta, ga_ptr, CUDA_R_32F, ldga, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+             status = cublasGemmEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, go_ptr, CUDA_R_32F, ldgo, &beta, ga_ptr, CUDA_R_32F, ldga, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
           } else {
              // Handle strided batch for grad_A (preserving batch structure)
-             status = cublasGemmStridedBatchedEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, stride_b, go_ptr, CUDA_R_32F, ldgo, stride_go, &beta, ga_ptr, CUDA_R_32F, ldga, stride_ga, tb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+             status = cublasGemmStridedBatchedEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, stride_b, go_ptr, CUDA_R_32F, ldgo, stride_go, &beta, ga_ptr, CUDA_R_32F, ldga, stride_ga, tb, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
           }
            
           if (status == CUBLAS_STATUS_SUCCESS) grad_a_done = true;
@@ -524,7 +524,7 @@ void launch_backward_matmul(
               // A^T [K, TotalRows]. GO [TotalRows, N]. Result [K, N].
               int M_total = M * tb;
               
-              status = cublasGemmEx(handle, CUBLAS_OP_N, opA, N, K_a, M_total, &alpha, go_ptr, CUDA_R_32F, ldgo, a_ptr, CUDA_R_32F, lda, &beta, gb_ptr, CUDA_R_32F, ldgb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+              status = cublasGemmEx(handle, CUBLAS_OP_N, opA, N, K_a, M_total, &alpha, go_ptr, CUDA_R_32F, ldgo, a_ptr, CUDA_R_32F, lda, &beta, gb_ptr, CUDA_R_32F, ldgb, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
               
           } else {
              // Batched Strategy
@@ -532,7 +532,7 @@ void launch_backward_matmul(
              long long stride_go = (go_ndim == 3) ? meta.grad_out_strides[0] : (static_cast<long long>(M)*N);
              long long stride_gb = (b_ndim == 3) ? meta.grad_b_strides[0] : (static_cast<long long>(K_a)*N);
              
-             status = cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, opA, N, K_a, M, &alpha, go_ptr, CUDA_R_32F, ldgo, stride_go, a_ptr, CUDA_R_32F, lda, stride_a, &beta, gb_ptr, CUDA_R_32F, ldgb, stride_gb, tb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+             status = cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, opA, N, K_a, M, &alpha, go_ptr, CUDA_R_32F, ldgo, stride_go, a_ptr, CUDA_R_32F, lda, stride_a, &beta, gb_ptr, CUDA_R_32F, ldgb, stride_gb, tb, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
           }
           if (status == CUBLAS_STATUS_SUCCESS) grad_b_done = true;
        }
