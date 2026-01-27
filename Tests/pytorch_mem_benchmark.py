@@ -57,9 +57,9 @@ def benchmark(device_str):
         # Track peak RSS
         peak_cpu = max(peak_cpu, psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024))
         if device.type == "cuda":
-            # For fair comparison with OwnTensor (which might include context/reserved), 
-            # we use memory_reserved which includes the caching pool.
-            peak_cuda = max(peak_cuda, torch.cuda.max_memory_reserved(device) / (1024 * 1024))
+            # For fair comparison with OwnTensor, use memory_allocated (actual tensor memory)
+            # not memory_reserved (which includes caching allocator overhead)
+            peak_cuda = max(peak_cuda, torch.cuda.max_memory_allocated(device) / (1024 * 1024))
             
     # Save to a temporary file for the runner to read
     with open("py_memory_temp.bin", "wb") as f:
