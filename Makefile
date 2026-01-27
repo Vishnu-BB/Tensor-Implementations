@@ -24,12 +24,12 @@ CUDA_LIB  := $(CUDA_ROOT)/lib64
 
 
 CPPFLAGS = -Iinclude -I$(CUDA_INC) -DWITH_CUDA 
-CXXFLAGS = -std=c++20 -fPIC -Wall -Wextra -g -fopenmp
-NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g --expt-relaxed-constexpr
+CXXFLAGS = -std=c++20 -fPIC -Wall -Wextra -g -O3 -fopenmp
+NVCCFLAGS = -std=c++20 -Xcompiler="-fPIC" -arch=sm_86 -g -O3 --expt-relaxed-constexpr
 
 RPATH = -Xlinker -rpath -Xlinker '$$ORIGIN/lib'
 LDFLAGS = -L$(CUDA_LIB) -L$(LIBDIR) $(RPATH)
-LDLIBS = -lcudart -ltbb -lcurand
+LDLIBS = -lcudart -ltbb -lcurand -lcublas
 
 # =============================================================================
 # File Discovery (Automatic)
