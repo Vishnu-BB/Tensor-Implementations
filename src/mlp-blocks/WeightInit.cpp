@@ -32,7 +32,6 @@ namespace OwnTensor
         Tensor xavier_norm_weight(OwnTensor::Shape shape, OwnTensor::Dtype dtype, OwnTensor::Device dev, bool req_grad, int fan_in, int fan_out)
         {
             float stddev = std::sqrt((2 / float(fan_in + fan_out)));
-            // std::cout << "Standard Deviation: "<< stddev << std::endl;
             return Tensor::randn(shape, TensorOptions().with_dtype(dtype).with_device(dev).with_req_grad(req_grad),42, stddev);             //42 is the seed value
         }
 
@@ -46,7 +45,6 @@ namespace OwnTensor
         Tensor he_norm_weight(OwnTensor::Shape shape, OwnTensor::Dtype dtype, OwnTensor::Device dev, bool req_grad, int fan_in)
         {
             float stddev = std::sqrt((2 / float(fan_in)));
-            // std::cout << "Standard Deviation: "<< stddev << std::endl;
             return Tensor::randn(shape, TensorOptions().with_dtype(dtype).with_device(dev).with_req_grad(req_grad),42, stddev);     
 
         }

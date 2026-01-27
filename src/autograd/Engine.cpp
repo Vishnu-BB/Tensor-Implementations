@@ -11,62 +11,85 @@
 namespace OwnTensor {
 namespace autograd {
 
+void build_topo_recursive(Node* node, std::unordered_set<Node*>& visited, std::vector<std::shared_ptr<Node>>& result) {
+    if (visited.count(node)) return;
+    visited.insert(node);
+    
+    // Visit inputs (next edges)
+    for (const auto& edge : node->next_edges()) {
+        if (edge.is_valid()) {
+            build_topo_recursive(edge.function.get(), visited, result);
+        }
+    }
+    
+    // Post-order add to result (leaves first) -> Wait, we want topological order for Backward.
+    // Backward needs: if Node A inputs to Node B, process B then A? 
+    // No. In Backward: Root (Loss) -> ... -> Leaf.
+    // If A takes B as input in forward. Forward: B -> A.
+    // Backward: A -> B.
+    // So we need to process A before B.
+    // This means Topological Sort of the Backward Graph.
+    // Backward Graph edges: A -> B.
+    // Standard DFS Post-Order gives Reverse Topological Sort.
+    // So if we push_back in post-order, we satisfy dependency if we read backwards?
+    // Let's trace:
+    // Visit A. Calls B. Visit B. B finishes. Push B. A finishes. Push A.
+    // Result: [B, A].
+    // Dependency: A -> B (A passes grad to B).
+    // So we need to process A, then B.
+    // So we need [A, B].
+    // This is Reverse Post-Order.
+    // So we just reverse the result vector? Or push_front (slow).
+    // Or just read vector in reverse?
+    // `Engine` iterates `nodes` forward.
+    // So `nodes` should be [A, B].
+    // So we need Reverse result of Post-Order DFS.
+}
+
 std::vector<std::shared_ptr<Node>> topological_sort(const Tensor& root) {
     std::vector<std::shared_ptr<Node>> result;
     std::unordered_set<Node*> visited;
-    std::unordered_map<Node*, int> in_degree;
     
-    // Get root's grad_fn
     auto root_fn = root.grad_fn();
-    if (!root_fn) {
-        return result;  // Leaf tensor, no graph to traverse
-    }
+    if (!root_fn) return result;
     
-    // BFS to build in-degree map
-    std::queue<std::shared_ptr<Node>> queue;
-    queue.push(root_fn);
-    visited.insert(root_fn.get());
-    in_degree[root_fn.get()] = 0;
+    // DFS
+    // We need to capture shared_ptrs to keep nodes alive?
+    // The graph holds shared_ptrs.
+    // DFS traverses raw pointers but we need to store shared_ptr in result.
+    // We can't get shared_ptr from raw pointer easily without `shared_from_this`.
+    // Node inherits `enable_shared_from_this`.
     
-    while (!queue.empty()) {
-        auto node = queue.front();
-        queue.pop();
-        
-        for (const auto& edge : node->next_edges()) {
-            if (edge.is_valid()) {
-                auto next_node = edge.function;
-                if (visited.find(next_node.get()) == visited.end()) {
-                    visited.insert(next_node.get());
-                    queue.push(next_node);
-                    in_degree[next_node.get()] = 0;
-                }
-                in_degree[next_node.get()]++;
-            }
-        }
-    }
+    // Helper lambda to handle shared_ptr
+    // std::function must handle recursion
+    std::vector<std::shared_ptr<Node>> stack;
+    // Iterative DFS to avoid recursion depth issues? (Depth ~100 is fine).
+    // But how to get shared_ptr from Node* in 'visited'?
+    // Just pass shared_ptr to recursive function.
     
-    // Kahn's algorithm for topological sort
-    std::queue<std::shared_ptr<Node>> zero_in_degree;
-    zero_in_degree.push(root_fn);
+    // Re-declare to use helper
+    std::unordered_set<Node*> visited_set;
     
-    while (!zero_in_degree.empty()) {
-        auto node = zero_in_degree.front();
-        zero_in_degree.pop();
-        result.push_back(node);
-        
-        for (const auto& edge : node->next_edges()) {
-            if (edge.is_valid()) {
-                auto next_node = edge.function;
-                in_degree[next_node.get()]--;
-                if (in_degree[next_node.get()] == 0) {
-                    zero_in_degree.push(next_node);
+    // Standard DFS Post-Order
+    // We need a helper that takes shared_ptr
+    struct DFS {
+        static void run(std::shared_ptr<Node> node, std::unordered_set<Node*>& visited, std::vector<std::shared_ptr<Node>>& out) {
+            if (visited.count(node.get())) return;
+            visited.insert(node.get());
+            
+            for (const auto& edge : node->next_edges()) {
+                if (edge.is_valid()) {
+                    run(edge.function, visited, out);
                 }
             }
+            out.push_back(node);
         }
-    }
+    };
     
-    // Reverse for backward order (leaves to root)
-    // std::reverse(result.begin(), result.end());  // already done by kahns alg itself 
+    DFS::run(root_fn, visited_set, result);
+    
+    // result is now [Leaf, ..., Root]. We need [Root, ..., Leaf].
+    std::reverse(result.begin(), result.end());
     
     return result;
 }
@@ -120,7 +143,7 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         return;
     }
     
-    grad_map[root_fn.get()] = {root_grad};
+    // grad_map[root_fn.get()] = {root_grad};
     
     // OPTIMIZATION: Reserve typical capacity for grad vectors to avoid reallocations
     grad_map.reserve(nodes.size());
