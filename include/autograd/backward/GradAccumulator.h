@@ -15,7 +15,7 @@ namespace autograd {
  */
 class GradAccumulator : public Node {
 private:
-    TensorImpl* leaf_impl_;  // Non-owning pointer to leaf tensor's impl
+    intrusive_ptr<TensorImpl> leaf_impl_;  // Owning pointer to keep leaf alive during backward
     
 public:
     explicit GradAccumulator(TensorImpl* impl);

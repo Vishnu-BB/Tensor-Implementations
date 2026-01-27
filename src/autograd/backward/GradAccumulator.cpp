@@ -12,7 +12,7 @@ std::vector<GradAccumulator*> GradAccumulator::pool_;
 std::mutex GradAccumulator::pool_mutex_;
 
 void GradAccumulator::reset(TensorImpl* impl) {
-    leaf_impl_ = impl;
+    leaf_impl_ = intrusive_ptr<TensorImpl>(impl);
     // Reset Node state if necessary (clearing edges, hooks etc.)
     // For now assuming Node state is clean or doesn't matter for new usage as leaf
     // Important: Node construction increments sequence_nr. Reuse means sequence_nr is stale?
@@ -27,56 +27,32 @@ void GradAccumulator::reset(TensorImpl* impl) {
 }
 
 std::shared_ptr<GradAccumulator> GradAccumulator::make(TensorImpl* impl) {
-    GradAccumulator* ptr = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(pool_mutex_);
-        if (!pool_.empty()) {
-            ptr = pool_.back();
-            pool_.pop_back();
-        }
-    }
+    // Temporarily disabled pooling for debugging
+    GradAccumulator* ptr = new GradAccumulator(impl);
     
-    if (!ptr) {
-        ptr = new GradAccumulator(impl);
-    } else {
-        ptr->reset(impl);
-    }
-    
-    // Return shared_ptr with custom deleter that returns to pool
-    return std::shared_ptr<GradAccumulator>(ptr, [](GradAccumulator* p) {
-        std::lock_guard<std::mutex> lock(pool_mutex_);
-        pool_.push_back(p);
-    });
+    // Return shared_ptr with default deleter (delete ptr)
+    return std::shared_ptr<GradAccumulator>(ptr);
 }
 
 std::vector<Tensor> GradAccumulator::apply(std::vector<Tensor>&& grads) {
-    if (grads.empty() || !leaf_impl_) {
-        return {};
-    }
-    
-    const Tensor& grad_output = grads[0];
-    
+    // fprintf(stderr, "DEBUG: GradAccumulator::apply EMPTY\n");
+    // return {};
+
+    // Assuming grads contains a single grad_output for this leaf
+    // And leaf_impl_ is the TensorImpl for which we are accumulating gradients
+    Tensor grad_output = std::move(grads[0]); // Take ownership of the grad
+
     // Accumulate gradient into leaf tensor
     if (leaf_impl_->has_autograd_meta()) {
         auto* meta = static_cast<AutogradMeta*>(leaf_impl_->autograd_meta());
         
-        if (meta->has_grad()) {
-            // Accumulate: existing_grad += grad_output
-            Tensor& existing_grad = meta->mutable_grad(leaf_impl_);
-            Tensor new_grad = operator+(existing_grad, grad_output);
-            meta->set_grad(new_grad);
-        } else {
-            // First gradient: just set it
-            meta->set_grad(grad_output);
-        }
+        // Use optimized accumulation (1 lock instead of 3)
+        meta->accumulate_grad(std::move(grad_output));
         
-        // Trigger post-accumulation hooks specifically after accumulation is done
-        // for this backward pass. Since Engine.cpp sums all gradients for GradAccumulator
-        // before calling apply, this is the final gradient for this pass.
         meta->trigger_post_acc_hooks(meta->grad());
     }
-    
-    // No outputs (leaf node)
+
+    // Leaf nodes don't propagate gradients further up the graph
     return {};
 }
 
