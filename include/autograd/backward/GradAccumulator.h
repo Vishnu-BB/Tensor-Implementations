@@ -20,8 +20,19 @@ private:
 public:
     explicit GradAccumulator(TensorImpl* impl);
     
+    // Pool factory method
+    static std::shared_ptr<GradAccumulator> make(TensorImpl* impl);
+    
     std::string name() const override { return "GradAccumulator"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    
+    // Reset state for pooling
+    void reset(TensorImpl* impl);
+
+private:
+   // Thread-safe pool
+   static std::vector<GradAccumulator*> pool_;
+   static std::mutex pool_mutex_;
 };
 
 } // namespace autograd

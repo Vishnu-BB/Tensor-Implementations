@@ -8,6 +8,47 @@ namespace autograd {
 GradAccumulator::GradAccumulator(TensorImpl* impl)
     : Node(1), leaf_impl_(impl) {}
 
+std::vector<GradAccumulator*> GradAccumulator::pool_;
+std::mutex GradAccumulator::pool_mutex_;
+
+void GradAccumulator::reset(TensorImpl* impl) {
+    leaf_impl_ = impl;
+    // Reset Node state if necessary (clearing edges, hooks etc.)
+    // For now assuming Node state is clean or doesn't matter for new usage as leaf
+    // Important: Node construction increments sequence_nr. Reuse means sequence_nr is stale?
+    // Engine uses topological sort which re-computes dependencies. 
+    // Sequence nr is mostly for debug or deterministic ties.
+    // Ideally we should re-assign a new sequence number.
+    // Accessing protected member in Node? 
+    // We can just leave it. If Engine relies heavily on strict increasing seq number for correctness it might issue.
+    // Engine uses topological sort based on structure, sequence_nr is secondary.
+    clear_edges(); 
+    // Reset edge to empty/invalid if any
+}
+
+std::shared_ptr<GradAccumulator> GradAccumulator::make(TensorImpl* impl) {
+    GradAccumulator* ptr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(pool_mutex_);
+        if (!pool_.empty()) {
+            ptr = pool_.back();
+            pool_.pop_back();
+        }
+    }
+    
+    if (!ptr) {
+        ptr = new GradAccumulator(impl);
+    } else {
+        ptr->reset(impl);
+    }
+    
+    // Return shared_ptr with custom deleter that returns to pool
+    return std::shared_ptr<GradAccumulator>(ptr, [](GradAccumulator* p) {
+        std::lock_guard<std::mutex> lock(pool_mutex_);
+        pool_.push_back(p);
+    });
+}
+
 std::vector<Tensor> GradAccumulator::apply(std::vector<Tensor>&& grads) {
     if (grads.empty() || !leaf_impl_) {
         return {};
