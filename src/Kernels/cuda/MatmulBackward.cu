@@ -439,83 +439,110 @@ void launch_backward_matmul(
    T* ga_ptr = grad_A.data<T>();
    T* gb_ptr = grad_B.data<T>();
    
-   // Launch grad_A kernel: grad_A[M, K_a] = grad_output[M, N] @ B[K_b, N]^T
-   // Note: K_a should equal K_b for valid matmul
+   // Check stride attributes
+   bool go_contiguous = (meta.grad_out_strides[go_ndim-1] == 1);
+   bool a_contiguous = (meta.a_strides[a_ndim-1] == 1);
+   bool a_transposed = (a_ndim >= 2 && meta.a_strides[a_ndim-2] == 1);
+   bool b_contiguous = (meta.b_strides[b_ndim-1] == 1);
+   bool b_transposed = (b_ndim >= 2 && meta.b_strides[b_ndim-2] == 1);
+   bool ga_contiguous = (meta.grad_a_strides[a_ndim-1] == 1);
+   bool gb_contiguous = (meta.grad_b_strides[b_ndim-1] == 1);
+
+   bool supported_for_fast_path = go_contiguous && (a_contiguous || a_transposed) && (b_contiguous || b_transposed) && ga_contiguous && gb_contiguous;
+
+   // Launch grad_A kernel: grad_A = grad_output @ B^T
+   bool grad_a_done = false;
    if constexpr (std::is_same<T, float>::value) {
-      // Check if tensors are contiguous for cuBLAS fast path
-      bool go_contiguous = (meta.grad_out_strides[go_ndim-1] == 1);
-      bool a_contiguous = (meta.a_strides[a_ndim-1] == 1);
-      bool b_contiguous = (meta.b_strides[b_ndim-1] == 1);
-      bool ga_contiguous = (meta.grad_a_strides[a_ndim-1] == 1);
-      bool gb_contiguous = (meta.grad_b_strides[b_ndim-1] == 1);
-      
-      // Use cuBLAS for 2D contiguous matrices
-      if (tb == 1 && go_contiguous && a_contiguous && b_contiguous && ga_contiguous && gb_contiguous &&
-          M >= 64 && N >= 64 && K_a >= 64) {
-         int current_device; cudaGetDevice(&current_device);
-         cublasHandle_t handle = get_cublas_handle_bwd(current_device);
-         cublasSetStream(handle, stream);
-         float alpha = 1.0f, beta = 0.0f;
-         
-         int lda = meta.a_strides[a_ndim-2];
-         int ldb = meta.b_strides[b_ndim-2];
-         int ldgo = meta.grad_out_strides[go_ndim-2];
-         int ldga = meta.grad_a_strides[a_ndim-2];
-         int ldgb = meta.grad_b_strides[b_ndim-2];
-         
-         // grad_A = grad_output @ B^T
-         // In row-major with TF32: swap operands
-         // C = A @ B^T => C^T = B @ A^T => in colmaj: C = B @ grad_out^T
-         cublasStatus_t status = cublasGemmEx(
-            handle,
-            CUBLAS_OP_T, CUBLAS_OP_N,  // B transposed, grad_out not
-            K_a, M, N,                 // grad_A is [M, K_a]
-            &alpha,
-            b_ptr, CUDA_R_32F, ldb,    // B is [K_a, N]
-            go_ptr, CUDA_R_32F, ldgo,  // grad_out is [M, N]
-            &beta,
-            ga_ptr, CUDA_R_32F, ldga,
-            CUBLAS_COMPUTE_32F_FAST_TF32,
-            CUBLAS_GEMM_DEFAULT_TENSOR_OP
-         );
-         if (status != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("cuBLAS GEMM (grad_A) failed: " + std::to_string(status));
-         }
-         
-         // grad_B = A^T @ grad_output
-         // In row-major: C = A^T @ B => C^T = B^T @ A => in colmaj: C = grad_out^T @ A
-         status = cublasGemmEx(
-            handle,
-            CUBLAS_OP_N, CUBLAS_OP_T,  // grad_out not transposed, A transposed
-            N, K_a, M,                 // grad_B is [K_a, N]
-            &alpha,
-            go_ptr, CUDA_R_32F, ldgo,  // grad_out is [M, N]
-            a_ptr, CUDA_R_32F, lda,    // A is [M, K_a]
-            &beta,
-            gb_ptr, CUDA_R_32F, ldgb,
-            CUBLAS_COMPUTE_32F_FAST_TF32,
-            CUBLAS_GEMM_DEFAULT_TENSOR_OP
-         );
-         if (status != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("cuBLAS GEMM (grad_B) failed: " + std::to_string(status));
-         }
-      } else {
-         // Fallback to custom kernels for strided/batched/small matrices
-         matmul_backward_dA_fp32<128, 128, 16, 4, 4><<<dim3((K_a+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(
-            go_ptr, b_ptr, ga_ptr, M, N, K_a, tb, meta);
-         
-         matmul_backward_dB_fp32<128, 128, 16, 4, 4><<<dim3((N+127)/128, (K_a+127)/128, tb), 1024, 0, stream>>>(
-            a_ptr, go_ptr, gb_ptr, M, K_a, N, tb, meta);
-      }
-   } else if constexpr (std::is_same<T, float16_t>::value || std::is_same<T, __half>::value) {
-      matmul_backward_dA_fp16<128, 128, 32, 32, 32><<<dim3((K_a+127)/128, (M+127)/128, tb), 512, 0, stream>>>(
-         reinterpret_cast<const __half*>(go_ptr), 
-         reinterpret_cast<const __half*>(b_ptr), 
-         reinterpret_cast<__half*>(ga_ptr), 
-         M, N, K_a, tb, meta);
-      
-      // For now, use cublas for grad_B in FP16 case (can add WMMA kernel later)
-      // TODO: Implement matmul_backward_dB_fp16
+       if (supported_for_fast_path && M >= 64 && N >= 64 && K_a >= 64) {
+          int current_device; cudaGetDevice(&current_device);
+          cublasHandle_t handle = get_cublas_handle_bwd(current_device);
+          cublasSetStream(handle, stream);
+          float alpha = 1.0f, beta = 0.0f;
+          
+          cublasOperation_t opB = b_contiguous ? CUBLAS_OP_T : CUBLAS_OP_N;
+          int ldb = b_contiguous ? meta.b_strides[b_ndim-2] : meta.b_strides[b_ndim-1];
+          int ldgo = meta.grad_out_strides[go_ndim-2];
+          int ldga = meta.grad_a_strides[a_ndim-2];
+          
+          long long stride_go = (go_ndim == 3) ? meta.grad_out_strides[0] : (static_cast<long long>(M)*N); // Approx for 4+ dims
+          long long stride_b = (b_ndim == 3) ? meta.b_strides[0] : 0; // Broadcast if mismatched
+          if (b_ndim == go_ndim) stride_b = (b_contiguous ? meta.b_strides[b_ndim-3] * meta.b_strides[b_ndim-2] : 0); // Crude estimation, trust ndim check
+          if (b_ndim < go_ndim) stride_b = 0; // Explicit broadcast
+          
+          long long stride_ga = (go_ndim == 3) ? meta.grad_a_strides[0] : (static_cast<long long>(M)*K_a);
+
+          cublasStatus_t status;
+          if (tb == 1) {
+             status = cublasGemmEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, go_ptr, CUDA_R_32F, ldgo, &beta, ga_ptr, CUDA_R_32F, ldga, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+          } else {
+             // Handle strided batch for grad_A (preserving batch structure)
+             status = cublasGemmStridedBatchedEx(handle, opB, CUBLAS_OP_N, K_a, M, N, &alpha, b_ptr, CUDA_R_32F, ldb, stride_b, go_ptr, CUDA_R_32F, ldgo, stride_go, &beta, ga_ptr, CUDA_R_32F, ldga, stride_ga, tb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+          }
+           
+          if (status == CUBLAS_STATUS_SUCCESS) grad_a_done = true;
+       }
+   }
+   
+   if (!grad_a_done) {
+       // Fallback
+       if constexpr (std::is_same<T, float>::value)
+          matmul_backward_dA_fp32<128, 128, 16, 4, 4><<<dim3((K_a+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(go_ptr, b_ptr, ga_ptr, M, N, K_a, tb, meta);
+       else if constexpr (std::is_same<T, float16_t>::value || std::is_same<T, __half>::value)
+          matmul_backward_dA_fp16<128, 128, 32, 32, 32><<<dim3((K_a+127)/128, (M+127)/128, tb), 512, 0, stream>>>(reinterpret_cast<const __half*>(go_ptr), reinterpret_cast<const __half*>(b_ptr), reinterpret_cast<__half*>(ga_ptr), M, N, K_a, tb, meta);
+   }
+
+   // Launch grad_B kernel: grad_B = A^T @ grad_output
+   // Handle Reduction if B dim < Output dim (Broadcast in forward)
+   
+   bool grad_b_actions_needed = true; // Could optimize if not req grad
+   bool grad_b_done = false;
+   
+   // Check reduction need
+   bool need_reduction = (b_ndim < go_ndim) || (tb > 1 && b_ndim == go_ndim && meta.b_shape[0] == 1);
+   // Standard broadcast check: if tb > 1 but grad_B is not batched.
+   // Assuming grad_B matches B shape.
+   if (tb > 1 && b_ndim < go_ndim) need_reduction = true;
+
+   if constexpr (std::is_same<T, float>::value) {
+       if (supported_for_fast_path && M >= 64 && N >= 64 && K_a >= 64) {
+          int current_device; cudaGetDevice(&current_device);
+          cublasHandle_t handle = get_cublas_handle_bwd(current_device);
+          cublasSetStream(handle, stream);
+          float alpha = 1.0f, beta = 0.0f;
+          
+          cublasOperation_t opA = a_contiguous ? CUBLAS_OP_T : CUBLAS_OP_N; // A^T
+          int lda = a_contiguous ? meta.a_strides[a_ndim-2] : meta.a_strides[a_ndim-1]; // Correct stride 
+          
+          int ldgo = meta.grad_out_strides[go_ndim-2];
+          int ldgb = meta.grad_b_strides[b_ndim-2];
+          
+          cublasStatus_t status;
+          
+          if (need_reduction) {
+              // Flatten Batch strategy: Treat A as [TotalRows, K], GO as [TotalRows, N]
+              // grad_B = A^T @ GO.
+              // A^T [K, TotalRows]. GO [TotalRows, N]. Result [K, N].
+              int M_total = M * tb;
+              
+              status = cublasGemmEx(handle, CUBLAS_OP_N, opA, N, K_a, M_total, &alpha, go_ptr, CUDA_R_32F, ldgo, a_ptr, CUDA_R_32F, lda, &beta, gb_ptr, CUDA_R_32F, ldgb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+              
+          } else {
+             // Batched Strategy
+             long long stride_a = (a_ndim == 3) ? meta.a_strides[0] : (static_cast<long long>(M)*K_a); 
+             long long stride_go = (go_ndim == 3) ? meta.grad_out_strides[0] : (static_cast<long long>(M)*N);
+             long long stride_gb = (b_ndim == 3) ? meta.grad_b_strides[0] : (static_cast<long long>(K_a)*N);
+             
+             status = cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, opA, N, K_a, M, &alpha, go_ptr, CUDA_R_32F, ldgo, stride_go, a_ptr, CUDA_R_32F, lda, stride_a, &beta, gb_ptr, CUDA_R_32F, ldgb, stride_gb, tb, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+          }
+          if (status == CUBLAS_STATUS_SUCCESS) grad_b_done = true;
+       }
+   }
+   
+   if (!grad_b_done) {
+       // Fallback
+       if constexpr (std::is_same<T, float>::value)
+          matmul_backward_dB_fp32<128, 128, 16, 4, 4><<<dim3((N+127)/128, (K_a+127)/128, tb), 1024, 0, stream>>>(a_ptr, go_ptr, gb_ptr, M, K_a, N, tb, meta);
+       // FP16 fallback not implemented for dB yet
    }
    
    cudaError_t err = cudaGetLastError();

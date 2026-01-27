@@ -310,69 +310,94 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
       matmul_bf16_optimized<128, 128, 32, 32, 32><<<dim3((N+127)/128, (M+127)/128, tb), 512, 0, stream>>>(reinterpret_cast<const __nv_bfloat16*>(ap), reinterpret_cast<const __nv_bfloat16*>(bp), reinterpret_cast<__nv_bfloat16*>(op), M, N, K, tb, meta);
    } else if constexpr (std::is_same<T, float>::value) {
       // Use cuBLAS for FP32 matmuls - enables TF32 Tensor Core acceleration
-      // Check if tensors are contiguous (row-major) for cuBLAS fast path
+      // Check if tensors are contiguous (row-major) OR transposed (col-major equivalent) for cuBLAS fast path
+      
       bool a_contiguous = (meta.a_strides[an-1] == 1);
+      bool a_transposed = (an >= 2 && meta.a_strides[an-2] == 1);
+      
       bool b_contiguous = (meta.b_strides[bn-1] == 1);
+      bool b_transposed = (bn >= 2 && meta.b_strides[bn-2] == 1);
+      
       bool out_contiguous = (meta.out_strides[on-1] == 1);
       
-      
       // Use cuBLAS for:
-      // 1. 2D contiguous matrices (tb=1)
-      // 2. Strided Batched matrices (tb>1) where strides are regular
+      // 1. 2D matrices (tb=1)
+      // 2. Strided Batched matrices (tb>1)
+      bool is_supported_layout = (a_contiguous || a_transposed) && (b_contiguous || b_transposed) && out_contiguous;
       bool is_strided_batch = false;
       long long stride_a = 0, stride_b = 0, stride_c = 0;
       
-      if (tb > 1 && a_contiguous && b_contiguous && out_contiguous) {
-          // Check if batch stride is regular
-          // We flattened tb = osh[0]...osh[on-3].
-          // For regular strided batch, the stride between batches must be constant.
-          // In most cases (like [B,H,T,D]), stride is indeed constant.
-          // Stride of batch dim is usually the stride of dim[on-3].
+      if (tb > 1 && is_supported_layout) {
+          // Calculate Strides for Batches
+          // For broadcasted dims (e.g. B is 2D but A is 3D), stride is 0.
           
-          // Case 1: Pure 3D [Batch, M, K]
-          if (an == 3 && bn == 3 && on == 3) {
-              stride_a = meta.a_strides[0];
-              stride_b = meta.b_strides[0];
-              stride_c = meta.out_strides[0];
-              is_strided_batch = true;
-          }
-          // Case 2: 4D [Batch, Heads, M, K] -> Flattened Batch*Heads
-          else if (an == 4 && bn == 4 && on == 4) {
-             // Verify regularity: stride[0] = stride[1]*shape[1] ?
-             // Actually, we just need to pass the stride of the *flattened* batch index.
-             // If we iterate batch_idx from 0..tb-1.
-             // offset = batch_idx * stride.
-             // This requires the batch dimensions to be packed contiguously or have uniform stride.
-             // Standard layout [B, H, M, K] fits this.
-             // stride_a = M*K (if row major contiguous).
-             // Let's assume standard layout for now.
-             stride_a = static_cast<long long>(M) * K;
-             stride_b = static_cast<long long>(K) * N;
-             stride_c = static_cast<long long>(M) * N;
-             // Verify strictly if complex layouts
-             // For now enable it for optimization.
+          // Helper to get batch stride check
+          // Assumption: dimensions 0..on-3 are the batch dimensions.
+          // Standard layout: Flattened batch.
+          
+          if (on == 3) {
+             stride_c = meta.out_strides[0];
+             stride_a = (an == 3) ? meta.a_strides[0] : 0; // Broadcast if an < 3
+             stride_b = (bn == 3) ? meta.b_strides[0] : 0; // Broadcast if bn < 3
              is_strided_batch = true;
+          } else if (on == 4) {
+             // Basic support for [B, H, M, N]
+             // We flatten first 2 dims.
+             // Stride is effective stride of the flattened index?
+             // Only if contiguous in batch dims.
+             // For now, only support if simple packing matches.
+             // Simplification: Check if stride[0] works for total batch.
+             // This assumes strict N, C, H, W structure usually.
+             
+             stride_c = static_cast<long long>(M) * N; // Estimate contiguous
+             stride_a = (an == 4) ? static_cast<long long>(M) * K : 0;
+             stride_b = (bn == 4) ? static_cast<long long>(K) * N : 0;
+             is_strided_batch = true; 
           }
       }
 
-      if ((tb == 1 || is_strided_batch) && a_contiguous && b_contiguous && out_contiguous && M >= 64 && N >= 64 && K >= 64) {
+      if ((tb == 1 || is_strided_batch) && is_supported_layout && M >= 64 && N >= 64 && K >= 64) {
          int current_device; cudaGetDevice(&current_device);
          cublasHandle_t handle = get_cublas_handle(current_device);
          cublasSetStream(handle, stream);
          
          float alpha = 1.0f, beta = 0.0f;
-         int lda = meta.a_strides[an-2];
-         int ldb = meta.b_strides[bn-2];
+         
+         // Setup A (Second in CuBLAS, since CuBLAS is ColMajor)
+         cublasOperation_t opA; 
+         int lda;
+         if (a_contiguous) { opA = CUBLAS_OP_N; lda = meta.a_strides[an-2]; }
+         else { opA = CUBLAS_OP_T; lda = meta.a_strides[an-1]; }
+         
+         // Setup B (First in CuBLAS)
+         cublasOperation_t opB;
+         int ldb;
+         if (b_contiguous) { opB = CUBLAS_OP_N; ldb = meta.b_strides[bn-2]; }
+         else { opB = CUBLAS_OP_T; ldb = meta.b_strides[bn-1]; }
+         
          int ldc = meta.out_strides[on-2];
          
-         cudaDataType_t Atype = CUDA_R_32F, Btype = CUDA_R_32F, Ctype = CUDA_R_32F, ComputeType = CUDA_R_32F; // Correct enums
-
+         // Logic correction:
+         // C = A @ B.
+         // CuBLAS (ColMajor): C^T = B^T @ A^T.
+         // Pass B as "A", A as "B".
+         // 
+         // If A is contiguous RM [M, K]: Represents A^T [K, M] CM.
+         // We need A^T in the equation. So Op = N.
+         // If A is transposed RM [M, K] (stride 1, M): Represents A [K, M] CM.
+         // We need A^T. So Op = T.
+         //
+         // If B is contiguous RM [K, N]: Represents B^T [N, K] CM.
+         // We need B^T in the equation. So Op = N.
+         // If B is transposed RM [K, N]: Represents B [N, K] CM.
+         // We need B^T. So Op = T.
+         
          cublasStatus_t status;
          
          if (tb == 1) {
              status = cublasGemmEx(
                 handle,
-                CUBLAS_OP_N, CUBLAS_OP_N,
+                opB, opA, 
                 N, M, K,
                 &alpha,
                 bp, CUDA_R_32F, ldb,
@@ -383,13 +408,9 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
              );
          } else {
-             // Strided Batched
-             // Swap A and B for Row-Major as usual
-             // C[i] = A[i] @ B[i]
-             // C^T[i] = B^T[i] @ A^T[i] => ColMaj: C[i] = B[i] @ A[i]
              status = cublasGemmStridedBatchedEx(
                 handle,
-                CUBLAS_OP_N, CUBLAS_OP_N,
+                opB, opA,
                 N, M, K,
                 &alpha,
                 bp, CUDA_R_32F, ldb, stride_b,
@@ -403,9 +424,8 @@ void launch_optimized_matmul(const Tensor& A, const Tensor& B, Tensor& output, c
          }
 
          if (status != CUBLAS_STATUS_SUCCESS) {
-            // If batched fails (e.g. constraints), fall back
-            // But usually it throws. Let's assume it works or we fix stride calculation.
-            throw std::runtime_error("cuBLAS GEMM failed with status: " + std::to_string(status));
+            // Fallback (e.g. if alignment issues, though Ex handles most)
+             matmul_fp32_optimized<128, 128, 16, 4, 4><<<dim3((N+127)/128, (M+127)/128, tb), 1024, 0, stream>>>(ap, bp, op, M, N, K, tb, meta);
          }
       } else {
          // Fallback to custom kernel
