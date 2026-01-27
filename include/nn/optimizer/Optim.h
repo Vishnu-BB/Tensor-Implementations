@@ -129,6 +129,10 @@ private:
 
    std::unordered_map<void*, Tensor> m_;             // First moment
    std::unordered_map<void*, Tensor> v_;             // Second moment
+
+ public:
+    float get_lr() const { return alpha_; }
+    void set_lr(float lr) { alpha_ = lr; }
 };
 
 } // namespace nn
