@@ -16,7 +16,7 @@ std::atomic<int64_t> TensorImpl::active_tensor_count_{0};
 // Constructors
 // ============================================================================
 
-TensorImpl::TensorImpl(Storage&& storage,
+TensorImpl::TensorImpl(intrusive_ptr<Storage> storage,
                        const Shape& shape,
                        const Stride& stride,
                        int64_t offset,
@@ -24,12 +24,12 @@ TensorImpl::TensorImpl(Storage&& storage,
                        DeviceIndex device,
                        intrusive_ptr<TensorImpl> base_impl)
     : storage_(std::move(storage)),
+      base_impl_(std::move(base_impl)),
       shape_(shape),
       stride_(stride),
       storage_offset_(offset),
       dtype_(dtype),
-      device_(device),
-      base_impl_(std::move(base_impl)) {
+      device_(device) {
     // autograd_meta_ is nullptr - lazy allocation
     active_tensor_count_++;
 }
@@ -39,9 +39,9 @@ TensorImpl::TensorImpl(const Shape& shape,
                        DeviceIndex device,
                        bool requires_grad)
     : shape_(shape),
+      storage_offset_(0),
       dtype_(dtype),
-      device_(device),
-      storage_offset_(0) {
+      device_(device) {
 
         AllocationTracker::set_thread_name("TensorImpl", AllocationTracker::get_current_lifetime());
     
@@ -62,7 +62,7 @@ TensorImpl::TensorImpl(const Shape& shape,
     }
     
     // Create storage
-    storage_ = Storage(nbytes, dtype, device, nullptr);
+    storage_ = make_intrusive<Storage>(nbytes, dtype, device, nullptr);
 
     AllocationTracker::clear_thread_name();
     
@@ -105,7 +105,7 @@ int64_t TensorImpl::ndim() const {
 // ============================================================================
 
 void* TensorImpl::mutable_data() {
-    uint8_t* base_ptr = storage_.data_ptr();
+    uint8_t* base_ptr = storage_->data_ptr();
     if (!base_ptr) {
         return nullptr;
     }
@@ -116,7 +116,7 @@ void* TensorImpl::mutable_data() {
 }
 
 const void* TensorImpl::data() const {
-    const uint8_t* base_ptr = storage_.data_ptr();
+    const uint8_t* base_ptr = storage_->data_ptr();
     if (!base_ptr) {
         return nullptr;
     }

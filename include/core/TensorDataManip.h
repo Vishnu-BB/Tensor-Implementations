@@ -8,6 +8,8 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include "dtype/DtypeTraits.h"
+#include "dtype/fp4.h"
 
 namespace OwnTensor {
 // Forward declaration for is_same_type

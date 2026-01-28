@@ -87,28 +87,16 @@ namespace OwnTensor
                    Shape shape,
                    Stride stride,
                    size_t offset) {
-        // Create new Storage that shares the data from the original
-        // CRITICAL FIX: Use DataPtrDeleter() with nullptr allocator to prevent double-free.
-        // The view does NOT own the memory; the original TensorImpl does.
-        // Warning: Original tensor must outlive this view!
-        Storage shared_storage = Storage(
-            DataPtr(impl->mutable_storage().data_ptr(), DataPtrDeleter(nullptr)), // No-op deleter
-            impl->storage().nbytes(),
-            impl->storage().dtype(),
-            impl->storage().device(),
-            impl->storage().allocator() // Keep track of allocator for info, but don't use for deletion
-        );
-        
-        // Create new TensorImpl with shared storage but different metadata
-        // Pass the original implementation (impl) to keep it alive via base_impl_
+        // Create new TensorImpl with shared storage
+        // Now safely shares the intrusive_ptr<Storage>
         impl_ = make_intrusive<TensorImpl>(
-            std::move(shared_storage),
+            impl->storage_ptr(),
             shape,
             stride,
             offset,
             impl->dtype(),
             impl->device(),
-            impl // Pass base_impl
+            impl // Pass base_impl to keep original alive (for views)
         );
 
         if (impl->requires_grad()) {
@@ -336,6 +324,27 @@ namespace OwnTensor
         } catch (const std::exception& e) {
             throw std::runtime_error(std::string("clone failed: ") + e.what());
         }
+    }
+
+    Tensor Tensor::detach() const {
+        if (!impl_) {
+            throw std::runtime_error("detach: tensor is not initialized");
+        }
+        
+        // Create new TensorImpl sharing the same storage
+        // But with NO base_impl, NO autograd meta, NO required grad
+        // The new tensor is a leaf node detached from the graph
+        auto new_impl = make_intrusive<TensorImpl>(
+            impl_->storage_ptr(),
+            impl_->sizes(),
+            impl_->strides(),
+            impl_->storage_offset(),
+            impl_->dtype(),
+            impl_->device()
+            // base_impl defaults to empty
+        );
+        
+        return Tensor(std::move(new_impl));
     }
 
     Tensor& Tensor::copy_(const Tensor& src) {
@@ -600,7 +609,7 @@ namespace OwnTensor
         size_t nbytes_val = self_contig.nbytes();
 
         // Create Storage with Pinned Allocator
-        Storage storage(nbytes_val, self_contig.dtype(), DeviceIndex(Device::CPU), pinned_alloc);
+        auto storage = make_intrusive<Storage>(nbytes_val, self_contig.dtype(), DeviceIndex(Device::CPU), pinned_alloc);
 
         // Create TensorImpl with Pinned Storage
         auto pinned_impl = make_intrusive<TensorImpl>(

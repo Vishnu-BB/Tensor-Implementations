@@ -312,6 +312,7 @@ namespace OwnTensor
         void display(int prec) const;
 
         Tensor clone() const;
+        Tensor detach() const;
         Tensor& copy_(const Tensor& src);
         Tensor as_type(Dtype new_dtype) const;
 
