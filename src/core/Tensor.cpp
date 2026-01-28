@@ -500,6 +500,10 @@ namespace OwnTensor
 
         try {
             device::copy_memory(new_ptr, Device::CPU, this->data(), this->device().device, this->nbytes());
+            // #ifdef WITH_CUDA
+            // cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+            // cudaStreamSynchronize(stream);
+            // #endif
         } catch (...) {
             cpu_alloc->deallocate(new_ptr);
             throw;
@@ -512,6 +516,12 @@ namespace OwnTensor
 
         // Update Storage: This frees old memory and sets new one
         this->impl_->mutable_storage().set_data_ptr(std::move(data_));
+        
+        #ifdef WITH_CUDA
+        cudaStream_t cuda_stream = OwnTensor::cuda::getCurrentStream();
+        cudaStreamSynchronize(cuda_stream);
+        #endif
+        
         this->impl_->mutable_storage().set_device(DeviceIndex(Device::CPU));
         this->impl_->mutable_storage().set_allocator(cpu_alloc);
         
@@ -553,6 +563,8 @@ namespace OwnTensor
 
         try {
             device::copy_memory(new_ptr, Device::CUDA, this->data(), this->device().device, this->nbytes());
+            // cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+            // cudaStreamSynchronize(stream);
         } catch (...) {
             cuda_alloc->deallocate(new_ptr);
             throw;
@@ -561,6 +573,10 @@ namespace OwnTensor
         DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cuda_alloc));
 
         this->impl_->mutable_storage().set_data_ptr(std::move(data_));
+        
+        cudaStream_t cuda_stream = OwnTensor::cuda::getCurrentStream();
+        cudaStreamSynchronize(cuda_stream);
+        
         this->impl_->mutable_storage().set_device(target_device);
         this->impl_->mutable_storage().set_allocator(cuda_alloc);
 
