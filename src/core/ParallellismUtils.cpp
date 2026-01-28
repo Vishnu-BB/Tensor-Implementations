@@ -201,7 +201,7 @@ namespace OwnTensor
             // Storage shard_storage = this->impl_->mutable_storage();
 
             intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(         
-                this->impl_->mutable_storage(),            // shared storage
+                std::move(this->impl_->mutable_storage()),            // shared storage
                 Shape(shard_shape),
                 ViewUtils::compute_strides(shard_shape),
                 static_cast<int64_t>(shard_offset_elems * dtype_size(this->dtype())),   // view offset
@@ -298,7 +298,7 @@ namespace OwnTensor
             // Storage shard_storage = this->impl_->storage();
 
             intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(  
-                this->impl_->mutable_storage(),
+                std::move(this->impl_->mutable_storage()),            // shared storage
                 shard_shape,
                 ViewUtils::compute_strides(shard_shape),
                 int64_t(byte_offset),   

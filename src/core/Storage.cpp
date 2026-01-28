@@ -82,7 +82,8 @@ Storage::Storage(DataPtr data_ptr, size_t nbytes, Dtype dtype,
 
 void Storage::set_data_ptr(DataPtr new_ptr) {
     // This will automatically deallocate old data via DataPtrDeleter
-    // data_ptr_.reset(new);
+    // allocator_->deallocate(static_cast<void*>(data_ptr_.release()));
+    
     data_ptr_ = std::move(new_ptr);
 }
 
