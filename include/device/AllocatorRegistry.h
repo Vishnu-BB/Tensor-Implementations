@@ -10,5 +10,6 @@ namespace OwnTensor
         static Allocator* get_cpu_allocator();
         static Allocator* get_pinned_cpu_allocator();
         static Allocator* get_cuda_allocator();
+        static Allocator* get_caching_allocator();
     };
 }

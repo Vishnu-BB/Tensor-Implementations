@@ -1,6 +1,7 @@
 #include "core/TensorImpl.h"
 #include "core/Tensor.h"
 #include "core/Views/ViewUtils.h"
+#include "device/AllocationTracker.h"
 #include <stdexcept>
 
 namespace OwnTensor {
@@ -41,6 +42,8 @@ TensorImpl::TensorImpl(const Shape& shape,
       dtype_(dtype),
       device_(device),
       storage_offset_(0) {
+
+        AllocationTracker::set_thread_name("TensorImpl", AllocationTracker::get_current_lifetime());
     
     // Calculate storage size
     size_t elem_count = 1;
@@ -60,6 +63,8 @@ TensorImpl::TensorImpl(const Shape& shape,
     
     // Create storage
     storage_ = Storage(nbytes, dtype, device, nullptr);
+
+    AllocationTracker::clear_thread_name();
     
     // Compute strides
     stride_ = ViewUtils::compute_strides(shape);
