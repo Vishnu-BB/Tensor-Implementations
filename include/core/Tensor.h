@@ -206,6 +206,7 @@ namespace OwnTensor
         std::vector<Tensor> make_shards_cust(std::vector<Shape> shard_shapes, bool row_major);
         std::vector<Tensor> make_shards_inplace(size_t num_shards, bool row_major);
         std::vector<Tensor> make_shards_inplace_cust(std::vector<Shape> shard_shapes, bool row_major);
+        void shard_into(std::vector<Tensor>& destinations);
 
         //#######################################################
         // Data Manipulation

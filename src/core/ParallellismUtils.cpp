@@ -200,11 +200,22 @@ namespace OwnTensor
             Shape shard_shape = Shape({ {1, (int64_t)shard_elems} });
             // Storage shard_storage = this->impl_->mutable_storage();
 
+            // Create aliased storage
+            uint8_t* raw_ptr = this->impl_->mutable_storage().data_ptr();
+            DataPtr alias_ptr(raw_ptr, DataPtrDeleter(nullptr));
+            Storage alias_storage(
+                std::move(alias_ptr),
+                this->impl_->storage().nbytes(),
+                this->dtype(),
+                this->device(),
+                nullptr
+            );
+
             intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(         
-                std::move(this->impl_->mutable_storage()),            // shared storage
+                std::move(alias_storage),            // shared (aliased) storage
                 Shape(shard_shape),
                 ViewUtils::compute_strides(shard_shape),
-                static_cast<int64_t>(shard_offset_elems * dtype_size(this->dtype())),   // view offset
+                static_cast<int64_t>(shard_offset_elems),   // view offset
                 this->dtype(),
                 this->device(),
                 intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
@@ -297,15 +308,26 @@ namespace OwnTensor
             size_t byte_offset = shard_offset_elems * dtype_size(this->dtype());
             // Storage shard_storage = this->impl_->storage();
 
-            intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(  
-                std::move(this->impl_->mutable_storage()),            // shared storage
-                shard_shape,
-                ViewUtils::compute_strides(shard_shape),
-                int64_t(byte_offset),   
-                this->dtype(),
-                this->device(),
-                intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
-            );
+             // Create aliased storage
+             uint8_t* raw_ptr = this->impl_->mutable_storage().data_ptr();
+             DataPtr alias_ptr(raw_ptr, DataPtrDeleter(nullptr));
+             Storage alias_storage(
+                 std::move(alias_ptr),
+                 this->impl_->storage().nbytes(),
+                 this->dtype(),
+                 this->device(),
+                 nullptr
+             );
+ 
+             intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(  
+                 std::move(alias_storage),            // shared (aliased) storage
+                 shard_shape,
+                 ViewUtils::compute_strides(shard_shape),
+                 static_cast<int64_t>(shard_offset_elems),   
+                 this->dtype(),
+                 this->device(),
+                 intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
+             );
 
             Tensor shard(std::move(shard_impl));
 
@@ -314,6 +336,60 @@ namespace OwnTensor
             shards.push_back(std::move(shard));
         }
         return shards;
+    }
+
+    void Tensor::shard_into(std::vector<Tensor>& destinations)
+    {
+        size_t current_elem_offset = 0;
+        size_t total_src_elems = this->numel();
+        size_t elem_size = dtype_size(this->dtype());
+
+        for (auto& dest : destinations)
+        {
+             size_t dest_elems = dest.numel();
+             
+             if (current_elem_offset + dest_elems > total_src_elems)
+             {
+                 throw std::runtime_error("shard_into: Destination tensor exceeds source tensor size.");
+             }
+
+             size_t view_elem_offset = this->storage_offset() + current_elem_offset;
+             size_t view_byte_offset = view_elem_offset * elem_size;
+             
+             // Create non-owning aliased storage for the view
+             // data() returns the pointer including storage_offset, so we need the raw base pointer
+             // Actually, TensorImpl stores storage_offset. Storage objects usually wrap the BASE allocation.
+             // So we should use the same base pointer as the source storage.
+             
+             // We can get the raw pointer from current storage
+             uint8_t* raw_ptr = this->impl_->mutable_storage().data_ptr();
+             
+             DataPtr alias_ptr(raw_ptr, DataPtrDeleter(nullptr));
+             
+             Storage alias_storage(
+                 std::move(alias_ptr),
+                 this->impl_->storage().nbytes(),
+                 this->dtype(),
+                 this->device(),
+                 nullptr
+             );
+             
+             intrusive_ptr<TensorImpl> shard_impl = make_intrusive<TensorImpl>(
+                 std::move(alias_storage), 
+                 dest.shape(), 
+                 ViewUtils::compute_strides(dest.shape()), 
+                 static_cast<int64_t>(view_elem_offset),
+                 this->dtype(),
+                 this->device(),
+                 intrusive_ptr<TensorImpl>(this->unsafeGetTensorImpl())
+             );
+             
+             Tensor shard_view(std::move(shard_impl));
+             
+             dest.copy_(shard_view);
+             
+             current_elem_offset += dest_elems;
+        }
     }
 
 }
