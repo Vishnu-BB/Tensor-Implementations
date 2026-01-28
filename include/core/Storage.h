@@ -5,6 +5,7 @@
 #include "device/Device.h"
 #include "device/Allocator.h"
 #include "dtype/Dtype.h"
+#include "core/IntrusivePtr.h"
 
 namespace OwnTensor {
 
@@ -36,7 +37,7 @@ using DataPtr = std::unique_ptr<uint8_t[], DataPtrDeleter>;
  * - Managing data lifetime via DataPtr
  * - Storing dtype and device information
  */
-class Storage {
+class Storage : public intrusive_ptr_target {
 private:
     DataPtr data_ptr_;           // Smart pointer with custom deleter
     Dtype dtype_;                // Data type of elements

@@ -110,13 +110,12 @@ std::vector<std::shared_ptr<Node>> topological_sort(const Tensor& root) {
 // Execution State for a single node
 struct NodeTask {
     std::mutex mutex;
-    std::vector<Tensor> input_grads;
+    std::unordered_map<uint32_t, std::vector<Tensor>> input_grads_map;
     int dependencies = 0;
     bool scheduled = false;
+    uint32_t max_output_nr = 0;
 
-    NodeTask() {
-        input_grads.reserve(2); 
-    }
+    NodeTask() = default;
 };
 
 // Shared Context for the entire Backward Pass
@@ -190,6 +189,9 @@ void backward(const Tensor& root, const Tensor* grad_output) {
                     bfs_queue.push_back(next_node);
                 }
                 task->dependencies++;
+                if (edge.input_nr > task->max_output_nr) {
+                    task->max_output_nr = edge.input_nr;
+                }
             }
         }
     }
@@ -200,91 +202,11 @@ void backward(const Tensor& root, const Tensor* grad_output) {
     // Seed root gradient
     {
         auto& task = ctx->graph_tasks[root_fn.get()];
-        task->input_grads.push_back(root_grad);
+        uint32_t slot = root.output_nr();
+        task->input_grads_map[slot].push_back(root_grad);
+        if (slot > task->max_output_nr) task->max_output_nr = slot;
     }
     
-    // 4. Task Function
-    // We define a recursive lambda, but with shared_ptr context
-    // We can't capture the lambda itself easily with std::function in this scope without leakage of logic.
-    // Instead we define a standalone helper or a lambda that captures context.
-    
-    std::function<void(Node*)> process_node;
-    process_node = [ctx, &process_node](Node* node) {
-        // Retrieve Task
-        NodeTask* task = ctx->graph_tasks.at(node).get();
-        
-        Tensor grad;
-        {
-            std::lock_guard<std::mutex> lock(task->mutex);
-            // Sum Gradients
-            if (!task->input_grads.empty()) {
-                 grad = task->input_grads[0];
-                 for (size_t i = 1; i < task->input_grads.size(); ++i) {
-                     grad = operator+(grad, task->input_grads[i]);
-                 }
-                 task->input_grads.clear();
-            }
-        }
-        
-        if (grad.is_valid()) {
-            std::vector<Tensor> input_grads = (*node)({grad});
-            node->release_saved_variables();
-            
-            const auto& edges = node->next_edges();
-            
-            for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
-                if (!edges[i].is_valid()) continue;
-                
-                Node* next_node = edges[i].function.get();
-                Tensor& out_grad = input_grads[i];
-                
-                NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
-                
-                bool ready = false;
-                {
-                    std::lock_guard<std::mutex> lock(next_task->mutex);
-                    if (out_grad.is_valid()) {
-                       next_task->input_grads.push_back(std::move(out_grad));
-                    }
-                    next_task->dependencies--;
-                    if (next_task->dependencies == 0 && !next_task->scheduled) {
-                        next_task->scheduled = true;
-                        ready = true;
-                    }
-                }
-                
-                if (ready) {
-                    {
-                        std::lock_guard<std::mutex> lk(ctx->state_mutex);
-                        ctx->active_tasks++;
-                    }
-                    // Capture ctx by value (shared_ptr copy)
-                    // Capture process_node by value (std::function copy)
-                    // Note: capturing process_node by reference is WRONG for async.
-                    // But process_node is a local std::function. 
-                    // WE NEED TO SOLVE THE RECURSION CAPTURE.
-                    // Standard fix: pass context to thread, and context contains the logic?
-                    // Or simply: Capturing `process_node` by value works if `std::function` supports it.
-                    // Checks: `std::function` is copyable.
-                    // But `process_node` captures `process_node` by reference...
-                    // Loop: `process_node` -> `reference to process_node`.
-                    // If we copy `process_node`, the copy refers to the original stack variable!
-                    // DANGER!
-                    
-                    // FIX: Make the lambda standalone, not capturing itself.
-                    // Pass the lambda/functor as an argument to itself?
-                    // Or define a struct functor.
-                }
-            } 
-        }
-        
-        // Finish
-        {
-            std::lock_guard<std::mutex> lk(ctx->state_mutex);
-            ctx->active_tasks--;
-        }
-        ctx->cv.notify_all();
-    };
     
     // IMPLEMENTATION OF SAFE RECURSIVE TASK
     struct TaskFunctor {
@@ -292,23 +214,28 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         Node* node;
         
         void operator()() {
-            // fprintf(stderr, "DEBUG: Executing Node %s\n", node->name().c_str());
             NodeTask* task = ctx->graph_tasks.at(node).get();
             
-            Tensor grad;
+            variable_list node_inputs;
+            bool has_grad = false;
             {
                 std::lock_guard<std::mutex> lock(task->mutex);
-                if (!task->input_grads.empty()) {
-                     grad = task->input_grads[0];
-                     for (size_t i = 1; i < task->input_grads.size(); ++i) {
-                         grad = operator+(grad, task->input_grads[i]);
-                     }
-                     task->input_grads.clear();
+                node_inputs.resize(task->max_output_nr + 1);
+                for (auto& [slot, grads] : task->input_grads_map) {
+                    if (!grads.empty()) {
+                        Tensor sum = grads[0];
+                        for (size_t i = 1; i < grads.size(); ++i) {
+                            sum = operator+(sum, grads[i]);
+                        }
+                        node_inputs[slot] = sum;
+                        has_grad = true;
+                    }
                 }
+                task->input_grads_map.clear();
             }
             
-            if (grad.is_valid()) {
-                std::vector<Tensor> input_grads = (*node)({grad});
+            if (has_grad) {
+                variable_list input_grads = (*node)(std::move(node_inputs));
                 node->release_saved_variables();
                 
                 const auto& edges = node->next_edges();
@@ -316,14 +243,16 @@ void backward(const Tensor& root, const Tensor* grad_output) {
                     if (!edges[i].is_valid()) continue;
                     
                     Node* next_node = edges[i].function.get();
+                    uint32_t slot = edges[i].input_nr;
                     Tensor& out_grad = input_grads[i];
                     
                     NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
                     bool ready = false;
                     {
                         std::lock_guard<std::mutex> lock(next_task->mutex);
-                         if (out_grad.is_valid()) {
-                           next_task->input_grads.push_back(std::move(out_grad));
+                        if (out_grad.is_valid()) {
+                           next_task->input_grads_map[slot].push_back(std::move(out_grad));
+                           if (slot > next_task->max_output_nr) next_task->max_output_nr = slot;
                         }
                         next_task->dependencies--;
                         if (next_task->dependencies == 0 && !next_task->scheduled) {

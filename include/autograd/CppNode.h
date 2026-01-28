@@ -10,6 +10,7 @@
 
 #include "autograd/Node.h"
 #include "autograd/AutogradContext.h"
+#include "autograd/ops_template.h"
 #include <memory>
 
 namespace OwnTensor {
@@ -49,7 +50,7 @@ protected:
     
 public:
     CppNode() : Node(0) {
-        ctx_.set_grad_fn(this->shared_from_this());
+        // Do not call shared_from_this() in constructor
     }
     
     std::string name() const override {
@@ -60,6 +61,21 @@ public:
         return T::backward(&ctx_, grads);
     }
     
+    template<typename NodeType, typename Arg>
+    static void connect_arg(std::shared_ptr<NodeType>& node, uint32_t& index, Arg&& arg) {
+        using ArgType = std::decay_t<Arg>;
+        if constexpr (std::is_same_v<ArgType, Tensor>) {
+             // It is a tensor
+             const Tensor& t = arg;
+             if (t.requires_grad()) {
+                 // We need mutable reference for get_grad_edge
+                 Tensor& t_mut = const_cast<Tensor&>(t);
+                 node->set_next_edge(index, get_grad_edge(t_mut));
+             }
+        }
+        index++;
+    }
+
     /**
      * @brief Apply the function with gradient tracking.
      * 
@@ -70,6 +86,18 @@ public:
         // Create node
         auto node = std::make_shared<T>();
         
+        // Ensure next_edges_ is sized to match arguments
+        if constexpr (sizeof...(Args) > 0) {
+            node->set_next_edge(sizeof...(Args) - 1, Edge());
+        }
+        
+        // Initialize context with safe shared_ptr
+        node->ctx_.set_grad_fn(node);
+        
+        // Connect edges for inputs
+        uint32_t index = 0;
+        (connect_arg(node, index, std::forward<Args>(args)), ...);
+        
         // Call forward
         variable_list outputs = T::forward(&node->ctx_, std::forward<Args>(args)...);
         
@@ -77,6 +105,7 @@ public:
         for (size_t i = 0; i < outputs.size(); ++i) {
             if (outputs[i].requires_grad()) {
                 outputs[i].set_grad_fn(node);
+                outputs[i].set_output_nr(i);
             }
         }
         

@@ -110,3 +110,22 @@ rebuild:
 clean:
 	@echo "--- Cleaning up build files ---"
 	rm -rf $(OBJDIR) $(TARGET_A) $(TARGET_SO) 
+
+.PHONY: run-folder
+run-folder: $(TARGET_SO)
+	@if [ -z "$(FOLDER)" ]; then \
+		echo "ERROR: Please specify a folder to run."; \
+		echo "Usage: make run-folder FOLDER=Tests/path/to/folder"; \
+		exit 1; \
+	fi
+	@echo "--- Running all tests in: $(FOLDER) ---"
+	@for file in $(FOLDER)/*.cpp; do \
+		if [ ! -f "$$file" ]; then continue; fi; \
+		echo "\n---------------------------------------------------------"; \
+		echo "Running: $$file"; \
+		echo "---------------------------------------------------------"; \
+		$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o snippet_runner "$$file" $(LDFLAGS) -ltensor $(LDLIBS) || exit 1; \
+		./snippet_runner || exit 1; \
+	done
+	@rm -f snippet_runner
+	@echo "\n✅ All tests in $(FOLDER) passed!" 

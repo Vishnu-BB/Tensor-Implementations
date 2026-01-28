@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include "core/Tensor.h"
+#include "core/TensorDataManip.h"
 #include "device/DeviceCore.h"
 #include "ops/Kernels.h"
 #include "autograd/AutogradOps.h"
