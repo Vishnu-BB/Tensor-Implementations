@@ -3,6 +3,9 @@
 #include "core/TensorImpl.h"
 #include "core/TensorDispatch.h"
 #include "device/DeviceTransfer.h"
+#include "autograd/backward/TransposeBackward.h"
+#include "autograd/backward/ReshapeBackward.h"
+#include "autograd/ops_template.h"
 #include <stdexcept>
 #include <numeric>
 
@@ -39,7 +42,16 @@ Tensor Tensor::view(Shape new_shape) const {
     Stride new_stride = ViewUtils::compute_strides(new_shape);
     
     // Use private constructor that shares storage
-    return Tensor(impl_, new_shape, new_stride, storage_offset());
+    Tensor result(impl_, new_shape, new_stride, storage_offset());
+
+    if (requires_grad()) {
+        auto grad_fn = std::make_shared<autograd::ReshapeBackward>(shape());
+        Tensor& self_mut = const_cast<Tensor&>(*this);
+        grad_fn->set_next_edge(0, autograd::get_grad_edge(self_mut));
+        result.set_grad_fn(grad_fn);
+        result.set_requires_grad(true);
+    }
+    return result;
 }
 
 Tensor Tensor::reshape(Shape new_shape) const {
@@ -58,13 +70,41 @@ Tensor Tensor::reshape(Shape new_shape) const {
     // if contiguous, identical to view()
     if (is_contiguous()) {
         Stride new_stride = ViewUtils::compute_strides(new_shape);
-        return Tensor(impl_, new_shape, new_stride, storage_offset());
+        Tensor result(impl_, new_shape, new_stride, storage_offset());
+        if (requires_grad()) {
+            auto grad_fn = std::make_shared<autograd::ReshapeBackward>(shape());
+            Tensor& self_mut = const_cast<Tensor&>(*this);
+            grad_fn->set_next_edge(0, autograd::get_grad_edge(self_mut));
+            result.set_grad_fn(grad_fn);
+            result.set_requires_grad(true);
+        }
+        return result;
     }
     
     // materialize contiguous copy on same device then view it
     Tensor base = contiguous();
     Stride new_stride = ViewUtils::compute_strides(new_shape);
-    return Tensor(base.impl_, new_shape, new_stride, base.storage_offset());
+    Tensor result(base.impl_, new_shape, new_stride, base.storage_offset());
+    
+    // Note: contiguous() creates a copy, but autograd should track the "reshape" logical op.
+    // If contiguous() is called, base is a new leaf unless tracked? 
+    // contiguous() usually copies data but doesn't record "Contiguous" backward unless implemented.
+    // However, reshape acts on base. 
+    // If the original tensor required grad, the reshaped one should too.
+    // But if base breaks graph...
+    // Actually, ReshapeBackward handles reshape logic.
+    // We should connect result to this (original).
+    // input_shape_ for backward should be this->shape().
+    
+    if (requires_grad()) {
+        auto grad_fn = std::make_shared<autograd::ReshapeBackward>(shape());
+        Tensor& self_mut = const_cast<Tensor&>(*this);
+        grad_fn->set_next_edge(0, autograd::get_grad_edge(self_mut));
+        result.set_grad_fn(grad_fn);
+        result.set_requires_grad(true);
+    }
+    
+    return result;
 }
 
 Tensor Tensor::transpose(int dim0, int dim1) const
@@ -86,7 +126,22 @@ Tensor Tensor::transpose(int dim0, int dim1) const
     Stride new_stride = impl_->strides();
     ViewUtils::swap_dimensions(new_shape, new_stride, dim0, dim1);
 
-    return Tensor(impl_, new_shape, new_stride, storage_offset());
+    Tensor result(impl_, new_shape, new_stride, storage_offset());
+
+    // Autograd support
+    if (requires_grad()) {
+        auto grad_fn = std::make_shared<autograd::TransposeBackward>(dim0, dim1);
+        
+        // Connect to input (this)
+        // We need to cast away const because get_grad_edge might create AccumulateGrad
+        Tensor& self_mut = const_cast<Tensor&>(*this);
+        grad_fn->set_next_edge(0, autograd::get_grad_edge(self_mut));
+        
+        result.set_grad_fn(grad_fn);
+        result.set_requires_grad(true);
+    }
+
+    return result;
 }
 
 Tensor Tensor::t() const {

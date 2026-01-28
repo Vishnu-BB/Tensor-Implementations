@@ -1,4 +1,5 @@
 #include "autograd/operations/NormalizationOps.h"
+#include "autograd/ops_template.h"
 #include "autograd/backward/NormalizationBackward.h"
 #include "autograd/AutogradContext.h"
 #include "autograd/Variable.h" // For make_variable
@@ -111,16 +112,27 @@ Tensor layer_norm(
         }
     }
     
-    // 3. Construct Autograd Graph
+// Construct Autograd Graph
     if (input.requires_grad() || (weight.is_valid() && weight.requires_grad()) || (bias.is_valid() && bias.requires_grad())) {
         
         auto grad_fn = std::make_shared<LayerNormBackward>(
             input, mean, rstd, weight, normalized_shape, eps
         );
         
-        grad_fn->set_next_edge(0, Edge(input.grad_fn(), input.output_nr()));
-        if (weight.is_valid()) grad_fn->set_next_edge(1, Edge(weight.grad_fn(), weight.output_nr()));
-        if (bias.is_valid()) grad_fn->set_next_edge(2, Edge(bias.grad_fn(), bias.output_nr()));
+        Tensor& input_mut = const_cast<Tensor&>(input);
+        if (input.requires_grad()) {
+            grad_fn->set_next_edge(0, get_grad_edge(input_mut));
+        }
+        
+        if (weight.is_valid() && weight.requires_grad()) {
+            Tensor& weight_mut = const_cast<Tensor&>(weight);
+            grad_fn->set_next_edge(1, get_grad_edge(weight_mut));
+        }
+        
+        if (bias.is_valid() && bias.requires_grad()) {
+            Tensor& bias_mut = const_cast<Tensor&>(bias);
+            grad_fn->set_next_edge(2, get_grad_edge(bias_mut));
+        }
         
         output.set_grad_fn(grad_fn);
         output.set_requires_grad(true);

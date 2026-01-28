@@ -59,4 +59,5 @@ Data-Parallel-DP/
 data2/
 data/
 docu/
-
+.log
+.csv
