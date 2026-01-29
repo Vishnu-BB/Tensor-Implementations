@@ -18,6 +18,25 @@ namespace OwnTensor {
 namespace autograd {
 
 // =============================================================================
+// Execution Mode Configuration
+// =============================================================================
+namespace {
+    // Global execution mode (default: SEQUENTIAL for determinism and debugging)
+    ExecutionMode g_execution_mode = ExecutionMode::SEQUENTIAL;
+    std::mutex g_mode_mutex;
+}
+
+ExecutionMode get_execution_mode() {
+    std::lock_guard<std::mutex> lock(g_mode_mutex);
+    return g_execution_mode;
+}
+
+void set_execution_mode(ExecutionMode mode) {
+    std::lock_guard<std::mutex> lock(g_mode_mutex);
+    g_execution_mode = mode;
+}
+
+// =============================================================================
 // Gradient Vector Pool
 // =============================================================================
 class GradientVectorPool {
@@ -132,29 +151,22 @@ struct BackwardContext {
     // We refer to utils::ThreadPool
 };
 
-void backward(const Tensor& root, const Tensor* grad_output) {
-    if (!root.requires_grad()) {
-        throw std::runtime_error("backward: tensor does not require gradients");
-    }
+// =============================================================================
+// Sequential Backward Implementation
+// =============================================================================
 
-    // 1. Initialize Root Gradient
-    Tensor root_grad;
-    bool is_scalar = root.ndim() == 0 || root.numel() == 1;
-    if (grad_output) {
-        root_grad = *grad_output;
-    } else if (is_scalar) {
-        root_grad = Tensor::ones(root.shape(), TensorOptions()
-            .with_dtype(root.dtype())
-            .with_device(root.device()));
-    } else {
-        throw std::runtime_error("backward: non-scalar requires grad_output");
-    }
-
+/**
+ * @brief Sequential backward pass with dependency-based execution.
+ * 
+ * Executes nodes in topological order when all dependencies are satisfied.
+ * Single-threaded, deterministic execution.
+ */
+void backward_sequential(const Tensor& root, const Tensor& root_grad) {
     auto root_fn = root.grad_fn();
     
     // Handle Leaf Root case
     if (!root_fn) {
-         if (root.unsafeGetTensorImpl()->has_autograd_meta()) {
+        if (root.unsafeGetTensorImpl()->has_autograd_meta()) {
             auto* meta = static_cast<AutogradMeta*>(
                 root.unsafeGetTensorImpl()->autograd_meta());
             if (meta->has_grad()) {
@@ -168,7 +180,144 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         return;
     }
 
-    // 2. Discover Graph and Helper Setup
+    // Step 1: Build graph and initialize dependency counters
+    struct SequentialNodeTask {
+        std::unordered_map<uint32_t, std::vector<Tensor>> input_grads_map;
+        int dependencies = 0;
+        uint32_t max_output_nr = 0;
+    };
+    
+    std::unordered_map<Node*, SequentialNodeTask> graph_tasks;
+    std::vector<Node*> bfs_queue;
+    
+    bfs_queue.push_back(root_fn.get());
+    graph_tasks[root_fn.get()] = SequentialNodeTask();
+    
+    size_t head = 0;
+    while (head < bfs_queue.size()) {
+        Node* node = bfs_queue[head++];
+        
+        for (const auto& edge : node->next_edges()) {
+            if (edge.is_valid()) {
+                Node* next_node = edge.function.get();
+                
+                if (graph_tasks.count(next_node) == 0) {
+                    // First time seeing this node
+                    bfs_queue.push_back(next_node);
+                    // Explicitly create the task to ensure it exists for subsequent lookups
+                    graph_tasks[next_node] = SequentialNodeTask();
+                }
+                
+                // Now safe to access
+                auto& task = graph_tasks[next_node];
+                task.dependencies++;
+                if (edge.input_nr > task.max_output_nr) {
+                    task.max_output_nr = edge.input_nr;
+                }
+            }
+        }
+    }
+    
+    // Step 2: Initialize root gradient
+    {
+        auto& task = graph_tasks[root_fn.get()];
+        uint32_t slot = root.output_nr();
+        task.input_grads_map[slot].push_back(root_grad);
+        if (slot > task.max_output_nr) task.max_output_nr = slot;
+    }
+    
+    // Step 3: Ready queue - nodes with zero dependencies
+    std::queue<Node*> ready_queue;
+    ready_queue.push(root_fn.get());
+    
+
+
+    // Step 4: Execute nodes in dependency order
+    int executed_nodes = 0;
+    while (!ready_queue.empty()) {
+        Node* node = ready_queue.front();
+        ready_queue.pop();
+        executed_nodes++;
+        
+
+        
+        SequentialNodeTask& task = graph_tasks.at(node);
+        
+        // Aggregate gradients for this node
+        variable_list node_inputs;
+        node_inputs.resize(task.max_output_nr + 1);
+        bool has_grad = false;
+        
+        for (auto& [slot, grads] : task.input_grads_map) {
+            if (!grads.empty()) {
+                Tensor sum = grads[0];
+                for (size_t i = 1; i < grads.size(); ++i) {
+                    sum = operator+(sum, grads[i]);
+                }
+                node_inputs[slot] = sum;
+                has_grad = true;
+            }
+        }
+        task.input_grads_map.clear();
+        
+        if (has_grad) {
+            // Execute node's backward function
+            variable_list input_grads = (*node)(std::move(node_inputs));
+            node->release_saved_variables();
+            
+            // Propagate gradients to next nodes
+            const auto& edges = node->next_edges();
+            for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
+                if (!edges[i].is_valid()) continue;
+                
+                Node* next_node = edges[i].function.get();
+                uint32_t slot = edges[i].input_nr;
+                Tensor& out_grad = input_grads[i];
+                
+                SequentialNodeTask& next_task = graph_tasks.at(next_node);
+                
+                // Add gradient to next node
+                if (out_grad.is_valid()) {
+                    next_task.input_grads_map[slot].push_back(std::move(out_grad));
+                    if (slot > next_task.max_output_nr) next_task.max_output_nr = slot;
+                }
+                
+                // Decrement dependency counter
+                next_task.dependencies--;
+                
+                // If all dependencies satisfied, add to ready queue
+                if (next_task.dependencies == 0) {
+                    ready_queue.push(next_node);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Parallel Backward Implementation
+// =============================================================================
+
+void backward_parallel(const Tensor& root, const Tensor& root_grad) {
+    auto root_fn = root.grad_fn();
+    
+    // Handle Leaf Root case
+    if (!root_fn) {
+        if (root.unsafeGetTensorImpl()->has_autograd_meta()) {
+            auto* meta = static_cast<AutogradMeta*>(
+                root.unsafeGetTensorImpl()->autograd_meta());
+            if (meta->has_grad()) {
+                Tensor& existing_grad = meta->mutable_grad(root.unsafeGetTensorImpl());
+                Tensor new_grad = operator+(existing_grad, root_grad);
+                meta->set_grad(new_grad);
+            } else {
+                meta->set_grad(root_grad);
+            }
+        }
+        return;
+    }
+
+    // Discover Graph and Setup (same as before)
     auto ctx = std::make_shared<BackwardContext>();
     std::vector<Node*> bfs_queue;
     
@@ -196,7 +345,7 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         }
     }
 
-    // 3. Execution Setup
+    // Execution Setup
     static utils::ThreadPool thread_pool(std::thread::hardware_concurrency());
     
     // Seed root gradient
@@ -207,8 +356,7 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         if (slot > task->max_output_nr) task->max_output_nr = slot;
     }
     
-    
-    // IMPLEMENTATION OF SAFE RECURSIVE TASK
+    // Task Functor for parallel execution
     struct TaskFunctor {
         std::shared_ptr<BackwardContext> ctx;
         Node* node;
@@ -267,7 +415,6 @@ void backward(const Tensor& root, const Tensor* grad_output) {
                 }
             }
             
-            
             // Atomic decrement
             int remaining = --ctx->active_tasks;
             if (remaining == 0) {
@@ -278,7 +425,6 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         
         static void schedule(std::shared_ptr<BackwardContext> ctx, Node* node) {
             ctx->active_tasks++;
-            // Enqueue a fresh TaskFunctor
             static utils::ThreadPool& pool = get_pool();
             pool.enqueue(TaskFunctor{ctx, node});
         }
@@ -292,10 +438,42 @@ void backward(const Tensor& root, const Tensor* grad_output) {
     // Kickoff
     TaskFunctor::schedule(ctx, root_fn.get());
     
-    // Wait
+    // Wait for completion
     {
         std::unique_lock<std::mutex> lk(ctx->state_mutex);
         ctx->cv.wait(lk, [&] { return ctx->active_tasks.load() == 0; });
+    }
+}
+
+// =============================================================================
+// Main Backward Dispatcher
+// =============================================================================
+
+void backward(const Tensor& root, const Tensor* grad_output) {
+    if (!root.requires_grad()) {
+        throw std::runtime_error("backward: tensor does not require gradients");
+    }
+
+    // 1. Initialize Root Gradient
+    Tensor root_grad;
+    bool is_scalar = root.ndim() == 0 || root.numel() == 1;
+    if (grad_output) {
+        root_grad = *grad_output;
+    } else if (is_scalar) {
+        root_grad = Tensor::ones(root.shape(), TensorOptions()
+            .with_dtype(root.dtype())
+            .with_device(root.device()));
+    } else {
+        throw std::runtime_error("backward: non-scalar requires grad_output");
+    }
+
+    // 2. Dispatch to sequential or parallel backend based on execution mode
+    ExecutionMode mode = get_execution_mode();
+    
+    if (mode == ExecutionMode::SEQUENTIAL) {
+        backward_sequential(root, root_grad);
+    } else {
+        backward_parallel(root, root_grad);
     }
 }
 
