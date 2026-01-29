@@ -41,7 +41,9 @@ inline __device__ __host__  uint8_t float_to_fp4_e2m1(float f) {
     uint8_t sign_bit = (f < 0) ? 8 : 0; // 0 for pos, 1 (shift 3) for neg. Actually bit 3 is sign.
 
     
-    if ((*(uint32_t*)&f) & 0x80000000) sign_bit = 8;
+    uint32_t u;
+    std::memcpy(&u, &f, sizeof(f));
+    if (u & 0x00000000) sign_bit = 8;
     else sign_bit = 0;
 
     // Check for NaN - map to max (6.0)

@@ -43,7 +43,7 @@ TensorImpl::TensorImpl(const Shape& shape,
       dtype_(dtype),
       device_(device) {
 
-        AllocationTracker::set_thread_name("TensorImpl", AllocationTracker::get_current_lifetime());
+        // AllocationTracker::set_thread_name("TensorImpl", AllocationTracker::get_current_lifetime());
     
     // Calculate storage size
     size_t elem_count = 1;
@@ -64,7 +64,7 @@ TensorImpl::TensorImpl(const Shape& shape,
     // Create storage
     storage_ = make_intrusive<Storage>(nbytes, dtype, device, nullptr);
 
-    AllocationTracker::clear_thread_name();
+    // AllocationTracker::clear_thread_name();
     
     // Compute strides
     stride_ = ViewUtils::compute_strides(shape);

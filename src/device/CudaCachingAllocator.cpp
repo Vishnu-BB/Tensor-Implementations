@@ -132,7 +132,7 @@ if (!block) {
             pool.allocated_blocks[block->ptr] = block;
         }
 
-        AllocationTracker::instance().on_alloc(block->ptr, bytes, device);
+        // AllocationTracker::instance().on_alloc(block->ptr, bytes, device);
 
         total_allocs_++;
         return block->ptr;
@@ -169,7 +169,7 @@ if (!block) {
                 return;
             }
 
-            AllocationTracker::instance().on_free(ptr, device);
+            // AllocationTracker::instance().on_free(ptr, device);
 
             block->allocated = false;
             pool_ptr->try_coalesce(block);

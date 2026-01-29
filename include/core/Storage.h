@@ -76,7 +76,7 @@ public:
     Storage(DataPtr data_ptr, size_t nbytes, Dtype dtype, DeviceIndex device, Allocator* allocator);
     
     // Move semantics
-    Storage(Storage&& other) noexcept = default;
+    Storage(Storage&& other) noexcept;
     Storage& operator=(Storage&& other) noexcept = default;
     
     // No copy (storage should not be copied, only moved)

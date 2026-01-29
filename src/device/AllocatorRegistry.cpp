@@ -15,9 +15,10 @@ namespace OwnTensor
     Allocator* AllocatorRegistry::get_allocator(Device device) {
         if (device == Device::CPU) {
             return &cpu_allocator;
-        } else if (device == Device::CUDA){
-            return &CachingCUDAAllocator::instance();
-        } else {
+        } //else if (device == Device::CUDA){
+          // return &CachingCUDAAllocator::instance();
+       // } 
+        else {
             return &cuda_allocator;
         }
     }

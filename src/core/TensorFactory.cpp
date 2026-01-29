@@ -86,7 +86,7 @@ namespace OwnTensor
         if (opts.device.is_cpu())
         {
             // CPU implementation - handles all 7 types automatically
-            dispatch_by_dtype(opts.dtype, [&](auto dummy)
+            dispatch_by_dtype(opts.dtype, [&](auto [[maybe_unused]] dummy)
                 {
                     // using T = decltype(dummy);
                     // tensor.fill(T(0.0f));

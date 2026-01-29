@@ -22,6 +22,18 @@ Storage::Storage()
     // Uninitialized storage - data_ptr_ is nullptr
 }
 
+Storage::Storage(Storage&& other) noexcept
+    :   intrusive_ptr_target(),
+        data_ptr_(std::move(other.data_ptr_)),
+        dtype_(other.dtype_),
+        nbytes_(other.nbytes_),
+        allocator_(other.allocator_),
+        device_(other.device_)
+{
+    other.nbytes_ = 0;
+    other.allocator_ = nullptr;
+}
+
 Storage::Storage(size_t nbytes, Dtype dtype, DeviceIndex device, Allocator* allocator)
     : dtype_(dtype),
       nbytes_(nbytes),

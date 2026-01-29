@@ -577,7 +577,7 @@ TestResult test_optimizer_step(const TestConfig& cfg) {
         const float* diff_data = diff_cpu.data<float>();
         
         bool weights_changed = false;
-        for (int64_t i = 0; i < diff.numel(); ++i) {
+        for (size_t i = 0; i < diff.numel(); ++i) {
             if (std::abs(diff_data[i]) > 1e-10f) {
                 weights_changed = true;
                 break;
@@ -639,7 +639,7 @@ TestResult test_gradient_clipping(const TestConfig& cfg) {
         Tensor grad_cpu_before = grad.to_cpu();
         float norm_before = 0.0f;
         const float* grad_data = grad_cpu_before.data<float>();
-        for (int64_t i = 0; i < grad.numel(); ++i) {
+        for (size_t i = 0; i < grad.numel(); ++i) {
             norm_before += grad_data[i] * grad_data[i];
         }
         norm_before = std::sqrt(norm_before);
@@ -657,7 +657,7 @@ TestResult test_gradient_clipping(const TestConfig& cfg) {
         Tensor grad_cpu_after = grad.to_cpu();
         float norm_after = 0.0f;
         grad_data = grad_cpu_after.data<float>();
-        for (int64_t i = 0; i < grad.numel(); ++i) {
+        for (size_t i = 0; i < grad.numel(); ++i) {
             norm_after += grad_data[i] * grad_data[i];
         }
         norm_after = std::sqrt(norm_after);

@@ -175,7 +175,7 @@ int main() {
         std::cout << "Successfully loaded batch. Input shape: " << batch.input.shape().dims[0] << "x" << batch.input.shape().dims[1] << std::endl;
 
         // Create a dummy model (Embedding layer)
-        OwnTensor::Device dev = OwnTensor::device::cuda_available() ? OwnTensor::Device::CUDA : OwnTensor::Device::CPU;
+        [[maybe_unused]] OwnTensor::Device dev = OwnTensor::device::cuda_available() ? OwnTensor::Device::CUDA : OwnTensor::Device::CPU;
         OwnTensor::DeviceIndex dev_idx = OwnTensor::DeviceIndex(OwnTensor::Device::CUDA, 0);
 
         // Create a dummy model (Embedding layer)
