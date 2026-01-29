@@ -11,6 +11,8 @@
 #include "ops/helpers/LossKernels.h"
 #endif
 
+#include <iostream>
+
 namespace OwnTensor {
 namespace autograd {
 

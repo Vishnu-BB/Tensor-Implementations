@@ -53,7 +53,10 @@ void run_loss_tests() {
     {
         int64_t start_mem = Tensor::get_active_tensor_count();
         // Probabilities 0..1
-        Tensor pred = autograd::sigmoid(Tensor::randn<float>(shape, opts));
+        Tensor pred_raw = autograd::sigmoid(Tensor::randn<float>(shape, opts));
+        Tensor pred = pred_raw.detach();
+        pred.set_requires_grad(true);
+        
         Tensor target = autograd::sigmoid(Tensor::randn<float>(shape, opts.with_req_grad(false))); // targets also 0..1
         
         Tensor pred_cpu = pred.to_cpu();
@@ -71,7 +74,10 @@ void run_loss_tests() {
     {
         int64_t start_mem = Tensor::get_active_tensor_count();
         // Softmax output
-        Tensor pred = autograd::softmax(Tensor::randn<float>(shape, opts), -1);
+        Tensor pred_raw = autograd::softmax(Tensor::randn<float>(shape, opts), -1);
+        Tensor pred = pred_raw.detach();
+        pred.set_requires_grad(true);
+        
         Tensor target = autograd::softmax(Tensor::randn<float>(shape, opts.with_req_grad(false)), -1); // One-hot or prob distribution
         
         Tensor pred_cpu = pred.to_cpu();

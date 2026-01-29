@@ -22,6 +22,7 @@ public:
     
     std::string name() const override { return "MSELossBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override;
 };
 
 /**
@@ -40,6 +41,7 @@ public:
     
     std::string name() const override { return "MAELossBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override;
 };
 
 /**
@@ -58,6 +60,7 @@ public:
     
     std::string name() const override { return "BCELossBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override;
 };
 
 /**
@@ -76,6 +79,7 @@ public:
     
     std::string name() const override { return "CCELossBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+    void release_saved_variables() override;
 };
 
 /**

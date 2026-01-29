@@ -45,6 +45,11 @@ std::vector<Tensor> MSELossBackward::apply(std::vector<Tensor>&& grads) {
     return {grad_pred};
 }
 
+void MSELossBackward::release_saved_variables() {
+    saved_pred_ = Tensor();
+    saved_target_ = Tensor();
+}
+
 // ============================================================================
 // MAELossBackward
 // ============================================================================
@@ -87,6 +92,11 @@ std::vector<Tensor> MAELossBackward::apply(std::vector<Tensor>&& grads) {
     return {grad_pred};
 }
 
+void MAELossBackward::release_saved_variables() {
+    saved_pred_ = Tensor();
+    saved_target_ = Tensor();
+}
+
 // ============================================================================
 // BCELossBackward
 // ============================================================================
@@ -125,6 +135,11 @@ std::vector<Tensor> BCELossBackward::apply(std::vector<Tensor>&& grads) {
     }
     
     return {grad_pred};
+}
+
+void BCELossBackward::release_saved_variables() {
+    saved_pred_ = Tensor();
+    saved_target_ = Tensor();
 }
 
 // ============================================================================
@@ -173,6 +188,11 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
     grad_pred = grad_pred * (scale * grad_val);
     
     return {grad_pred};
+}
+
+void CCELossBackward::release_saved_variables() {
+    saved_pred_ = Tensor();
+    saved_target_ = Tensor();
 }
 
 // ============================================================================
