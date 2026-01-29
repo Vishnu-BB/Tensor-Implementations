@@ -251,8 +251,12 @@ void backward_sequential(const Tensor& root, const Tensor& root_grad) {
         for (auto& [slot, grads] : task.input_grads_map) {
             if (!grads.empty()) {
                 Tensor sum = grads[0];
+                if (!sum.is_contiguous()) sum = sum.contiguous();
+                
                 for (size_t i = 1; i < grads.size(); ++i) {
-                    sum = operator+(sum, grads[i]);
+                    Tensor next_grad = grads[i];
+                    if (!next_grad.is_contiguous()) next_grad = next_grad.contiguous();
+                    sum = operator+(sum, next_grad);
                 }
                 node_inputs[slot] = sum;
                 has_grad = true;
@@ -260,35 +264,37 @@ void backward_sequential(const Tensor& root, const Tensor& root_grad) {
         }
         task.input_grads_map.clear();
         
+        variable_list input_grads;
         if (has_grad) {
             // Execute node's backward function
-            variable_list input_grads = (*node)(std::move(node_inputs));
-            node->release_saved_variables();
+            input_grads = (*node)(std::move(node_inputs));
+        }
+        
+        // Always release variables and propagate to dependencies to avoid memory leaks
+        node->release_saved_variables();
+        
+        // Propagate gradients (or lack thereof) to next nodes
+        const auto& edges = node->next_edges();
+        for (size_t i = 0; i < edges.size(); ++i) {
+            if (!edges[i].is_valid()) continue;
             
-            // Propagate gradients to next nodes
-            const auto& edges = node->next_edges();
-            for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
-                if (!edges[i].is_valid()) continue;
-                
-                Node* next_node = edges[i].function.get();
-                uint32_t slot = edges[i].input_nr;
-                Tensor& out_grad = input_grads[i];
-                
-                SequentialNodeTask& next_task = graph_tasks.at(next_node);
-                
-                // Add gradient to next node
-                if (out_grad.is_valid()) {
-                    next_task.input_grads_map[slot].push_back(std::move(out_grad));
-                    if (slot > next_task.max_output_nr) next_task.max_output_nr = slot;
-                }
-                
-                // Decrement dependency counter
-                next_task.dependencies--;
-                
-                // If all dependencies satisfied, add to ready queue
-                if (next_task.dependencies == 0) {
-                    ready_queue.push(next_node);
-                }
+            Node* next_node = edges[i].function.get();
+            uint32_t slot = edges[i].input_nr;
+            
+            SequentialNodeTask& next_task = graph_tasks.at(next_node);
+            
+            // Add gradient to next node if available
+            if (i < input_grads.size() && input_grads[i].is_valid()) {
+                next_task.input_grads_map[slot].push_back(std::move(input_grads[i]));
+                if (slot > next_task.max_output_nr) next_task.max_output_nr = slot;
+            }
+            
+            // Decrement dependency counter
+            next_task.dependencies--;
+            
+            // If all dependencies satisfied, add to ready queue
+            if (next_task.dependencies == 0) {
+                ready_queue.push(next_node);
             }
         }
     }
@@ -372,8 +378,11 @@ void backward_parallel(const Tensor& root, const Tensor& root_grad) {
                 for (auto& [slot, grads] : task->input_grads_map) {
                     if (!grads.empty()) {
                         Tensor sum = grads[0];
+                        if (!sum.is_contiguous()) sum = sum.contiguous();
                         for (size_t i = 1; i < grads.size(); ++i) {
-                            sum = operator+(sum, grads[i]);
+                            Tensor next_grad = grads[i];
+                            if (!next_grad.is_contiguous()) next_grad = next_grad.contiguous();
+                            sum = operator+(sum, next_grad);
                         }
                         node_inputs[slot] = sum;
                         has_grad = true;
@@ -382,36 +391,38 @@ void backward_parallel(const Tensor& root, const Tensor& root_grad) {
                 task->input_grads_map.clear();
             }
             
+            variable_list input_grads;
             if (has_grad) {
-                variable_list input_grads = (*node)(std::move(node_inputs));
-                node->release_saved_variables();
+                input_grads = (*node)(std::move(node_inputs));
+            }
+            
+            // Always release variables and propagate to dependencies
+            node->release_saved_variables();
+            
+            const auto& edges = node->next_edges();
+            for (size_t i = 0; i < edges.size(); ++i) {
+                if (!edges[i].is_valid()) continue;
                 
-                const auto& edges = node->next_edges();
-                for (size_t i = 0; i < edges.size() && i < input_grads.size(); ++i) {
-                    if (!edges[i].is_valid()) continue;
-                    
-                    Node* next_node = edges[i].function.get();
-                    uint32_t slot = edges[i].input_nr;
-                    Tensor& out_grad = input_grads[i];
-                    
-                    NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
-                    bool ready = false;
-                    {
-                        std::lock_guard<std::mutex> lock(next_task->mutex);
-                        if (out_grad.is_valid()) {
-                           next_task->input_grads_map[slot].push_back(std::move(out_grad));
-                           if (slot > next_task->max_output_nr) next_task->max_output_nr = slot;
-                        }
-                        next_task->dependencies--;
-                        if (next_task->dependencies == 0 && !next_task->scheduled) {
-                            next_task->scheduled = true;
-                            ready = true;
-                        }
+                Node* next_node = edges[i].function.get();
+                uint32_t slot = edges[i].input_nr;
+                
+                NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
+                bool ready = false;
+                {
+                    std::lock_guard<std::mutex> lock(next_task->mutex);
+                    if (i < input_grads.size() && input_grads[i].is_valid()) {
+                       next_task->input_grads_map[slot].push_back(std::move(input_grads[i]));
+                       if (slot > next_task->max_output_nr) next_task->max_output_nr = slot;
                     }
-                    
-                    if (ready) {
-                        schedule(ctx, next_node);
+                    next_task->dependencies--;
+                    if (next_task->dependencies == 0 && !next_task->scheduled) {
+                        next_task->scheduled = true;
+                        ready = true;
                     }
+                }
+                
+                if (ready) {
+                    schedule(ctx, next_node);
                 }
             }
             
