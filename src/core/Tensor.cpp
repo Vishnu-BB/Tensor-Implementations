@@ -500,16 +500,10 @@ namespace OwnTensor
 
         try {
             device::copy_memory(new_ptr, Device::CPU, this->data(), this->device().device, this->nbytes());
-            // #ifdef WITH_CUDA
-            // cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            // cudaStreamSynchronize(stream);
-            // #endif
         } catch (...) {
             cpu_alloc->deallocate(new_ptr);
             throw;
         }
-
-        // this->impl_->storage().data_ptr().reset();
 
         // Create DataPtr with proper deleter that uses the allocator
         DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cpu_alloc));
@@ -563,8 +557,6 @@ namespace OwnTensor
 
         try {
             device::copy_memory(new_ptr, Device::CUDA, this->data(), this->device().device, this->nbytes());
-            // cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            // cudaStreamSynchronize(stream);
         } catch (...) {
             cuda_alloc->deallocate(new_ptr);
             throw;

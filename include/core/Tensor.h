@@ -202,7 +202,9 @@ namespace OwnTensor
         TensorOptions opts();
         Tensor slice(size_t start, size_t length);
         Tensor flatten_concat(std::vector<Tensor>& tensor_list);
+        Tensor narrow(int64_t axis, int64_t start, int64_t length);
         std::vector<Tensor> make_shards(size_t num_shards, bool row_major);
+        std::vector<Tensor>make_shards(size_t num_shards, int64_t axis);
         std::vector<Tensor> make_shards_cust(std::vector<Shape> shard_shapes, bool row_major);
         std::vector<Tensor> make_shards_inplace(size_t num_shards, bool row_major);
         std::vector<Tensor> make_shards_inplace_cust(std::vector<Shape> shard_shapes, bool row_major);

@@ -79,6 +79,113 @@ namespace OwnTensor
 
     }
 
+    // Tensor Tensor::narrow(int64_t axis, int64_t start, int64_t length)
+    // {
+    //     std::vector<int64_t> strides(this->shape().dims.size());
+    //     int64_t curr_stride = 1;
+
+    //     for (int i = this->shape().dims.size() - 1; i>=0; --i)
+    //     {
+    //         strides[i] = curr_stride;
+    //         curr_stride *= this->shape().dims[i];
+    //     }
+
+    //     size_t elem_bytes = dtype_size(this->dtype());
+    //     uint8_t* new_base = static_cast<uint8_t*>(this->data()) + (start * strides[axis] * elem_bytes);
+
+    //     std::vector<int64_t> new_shape = this->shape().dims;
+    //     new_shape[axis] = length;
+
+    //     Tensor narrowed_view({new_shape}, this->opts());
+    //     size_t total_bytes_to_copy = length * strides[axis] * elem_bytes;
+
+    //     device::copy_memory(narrowed_view.data(), narrowed_view.device().device,
+    //                        new_base,this->device().device, total_bytes_to_copy);
+
+    //     return narrowed_view;
+    // }
+
+Tensor Tensor::narrow(int64_t axis, int64_t start, int64_t length) {
+    auto old_shape = this->shape();
+    auto new_shape = old_shape;
+    new_shape.dims[axis] = length;
+
+    Tensor result(new_shape, this->opts());
+
+    // 1. Calculate strides for row-major layout
+    std::vector<int64_t> strides(old_shape.dims.size());
+    int64_t s = 1;
+    for (int i = old_shape.dims.size() - 1; i >= 0; --i) {
+        strides[i] = s;
+        s *= old_shape.dims[i];
+    }
+
+    // 2. Identify the 'block' to copy and the 'jump' between blocks
+    // outer_count: How many times we need to perform a copy (dims to the left)
+    // copy_size_elems: Number of elements in one contiguous chunk (this axis + dims to the right)
+    int64_t outer_count = 1;
+    for (int i = 0; i < axis; ++i) outer_count *= old_shape.dims[i];
+
+    // Number of elements to copy in one contiguous burst
+    // This is the narrowed length * everything to the right of the axis
+    int64_t copy_size_elems = length * strides[axis];
+    
+    // The distance in memory between the START of one block and the START of the next
+    // in the ORIGINAL tensor (this is the full stride of the dimension above the axis)
+    int64_t src_step_elems = old_shape.dims[axis] * strides[axis];
+    
+    // The distance in memory between blocks in the NEW shard tensor
+    int64_t dst_step_elems = length * strides[axis];
+
+    size_t elem_bytes = dtype_size(this->dtype());
+    uint8_t* base_src = static_cast<uint8_t*>(this->data());
+    uint8_t* base_dst = static_cast<uint8_t*>(result.data());
+
+    // IMPORTANT: The global offset for the very first element of the shard
+    uint8_t* shard_start_src = base_src + (start * strides[axis] * elem_bytes);
+
+    for (int64_t i = 0; i < outer_count; ++i) {
+        uint8_t* current_src = shard_start_src + (i * src_step_elems * elem_bytes);
+        uint8_t* current_dst = base_dst + (i * dst_step_elems * elem_bytes);
+
+        device::copy_memory(
+            current_dst, result.device().device,
+            current_src, this->device().device,
+            copy_size_elems * elem_bytes
+        );
+    }
+
+    return result;
+}
+    
+std::vector<Tensor> Tensor::make_shards(size_t num_shards, int64_t axis) { 
+    // 1. Get current shape and validate 
+    Shape current_shape = this->shape();
+    if (axis < 0 || axis >= current_shape.dims.size()) 
+    {
+         throw std::out_of_range("Axis index out of bounds"); 
+    }
+    int64_t dim_size = current_shape.dims[axis];
+    if (dim_size % num_shards != 0) 
+    { 
+        throw std::runtime_error("Dimension size not divisible by num_shards"); 
+    }
+    int64_t shard_dim_size = dim_size / num_shards;
+    std::vector<Tensor> shards; shards.reserve(num_shards);
+    
+    // 2. Iterate and narrow along the chosen axis 
+    for (size_t i = 0; i < num_shards; ++i) 
+    { 
+        int64_t start = i * shard_dim_size; 
+        
+        // Use 'narrow' to extract a slice of the tensor along the axis 
+        // This is the C++ equivalent of tensor.select() or tensor[:, start:start+len] 
+        Tensor shard = this->narrow(axis, start, shard_dim_size).contiguous(); 
+        shards.push_back(std::move(shard)); 
+    } 
+    return shards; 
+}
+
     std::vector<Tensor> Tensor::make_shards(size_t num_shards, bool row_major)
     {
         if (!row_major)
