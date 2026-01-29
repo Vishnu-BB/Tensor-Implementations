@@ -356,6 +356,7 @@ public:
         register_post_hook(std::move(hook));
     }
     
+
     /**
      * @brief Get number of pre-hooks.
      */
