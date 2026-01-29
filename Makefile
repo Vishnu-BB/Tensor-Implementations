@@ -99,8 +99,8 @@ run-snippet: $(TARGET_SO)
 	@echo "\n--- Running snippet_runner ---"
 	./snippet_runner
 	@echo "\n"
-	@echo "\n--- Cleaning up snippet ---"
-	rm -f snippet_runner
+# 	@echo "\n--- Cleaning up snippet ---"
+# 	rm -f snippet_runner
 
 .PHONY: rebuild
 rebuild:

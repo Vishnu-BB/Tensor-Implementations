@@ -104,69 +104,6 @@ namespace OwnTensor
         }
     }
 
-    // Main implementation
-    // Tensor Tensor::where(const Tensor& condition, const Tensor& input, const Tensor& other) {
-    //     // Step 1: Validate inputs
-    //     if (condition.dtype() != Dtype::Bool && condition.dtype() != Dtype::Int32) {
-    //         throw std::invalid_argument("Condition must be Bool or convertible to bool");
-    //     }
-        
-    //     // Step 2: Determine output shape via broadcasting
-    //     std::vector<int64_t> output_shape = broadcast_shapes(
-    //         broadcast_shapes(condition.shape(), input.shape()),
-    //         other.shape()
-    //     );
-        
-    //     // Step 3: Determine output dtype (promote input and other)
-    //     Dtype output_dtype = promote_dtypes(input.dtype(), other.dtype());
-        
-    //     // Step 4: Determine device (all must be on same device)
-    //     if (condition.device() != input.device() || input.device() != other.device()) {
-    //         throw std::invalid_argument("All tensors must be on the same device");
-    //     }
-    //     Device device = condition.device();
-        
-    //     // Step 5: Create output tensor
-    //     Tensor result(output_shape, output_dtype, DeviceIndex(device));
-        
-    //     // Step 6: Dispatch to appropriate kernel
-    //     if (device == Device::CPU) {
-    //         where_cpu_kernel(condition, input, other, result);
-    //     } else if (device == Device::CUDA) {
-    //         where_cuda_kernel(condition, input, other, result);
-    //     }
-        
-    //     return result;
-    // }
-
-    // // Scalar overloads
-    // Tensor Tensor::where(const Tensor& condition, float input_scalar, const Tensor& other) {
-    //     Tensor input_tensor = Tensor::full(condition.shape(), input_scalar, 
-    //                                     other.dtype(), DeviceIndex(condition.device()));
-    //     return where(condition, input_tensor, other);
-    // }
-
-    // Tensor Tensor::where(const Tensor& condition, const Tensor& input, float other_scalar) {
-    //     Tensor other_tensor = Tensor::full(condition.shape(), other_scalar, 
-    //                                     input.dtype(), DeviceIndex(condition.device()));
-    //     return where(condition, input, other_tensor);
-    // }
-
-    // Tensor Tensor::where(const Tensor& condition, float input_scalar, float other_scalar) {
-    //     Tensor input_tensor = Tensor::full(condition.shape(), input_scalar, 
-    //                                     Dtype::Float32, DeviceIndex(condition.device()));
-    //     Tensor other_tensor = Tensor::full(condition.shape(), other_scalar, 
-    //                                     Dtype::Float32, DeviceIndex(condition.device()));
-    //     return where(condition, input_tensor, other_tensor);
-    // }
-
-    // // Single argument version - returns indices
-    // std::vector<Tensor> Tensor::where(const Tensor& condition) {
-    //     // This is equivalent to nonzero(condition, as_tuple=True)
-    //     // Returns a vector of 1D tensors, one for each dimension
-    //     // containing the indices where condition is true
-    //     return condition.nonzero(true);  // Assuming you have nonzero implemented
-    // }
     
     // ========================================================================
     // Utility Methods - Delegate to TensorImpl
@@ -551,8 +488,103 @@ namespace OwnTensor
         return to(DeviceIndex(Device::CPU));
     }
 
+    void Tensor::to_cpu_() {
+        if (!impl_) {
+            throw std::runtime_error("inplace to_cpu_: tensor is not initialized");
+        }
+
+        if (this->device().is_cpu()) {
+            return;
+        }
+
+        Allocator* cpu_alloc = AllocatorRegistry::get_allocator(Device::CPU);
+        if (!cpu_alloc) {
+             throw std::runtime_error("to_cpu_: Failed to get CPU allocator");
+        }
+
+        void* new_ptr = cpu_alloc->allocate(this->nbytes());
+        if (!new_ptr) {
+             throw std::runtime_error("to_cpu_: Failed to allocate memory on CPU");
+        }
+
+        try {
+            device::copy_memory(new_ptr, Device::CPU, this->data(), this->device().device, this->nbytes());
+        } catch (...) {
+            cpu_alloc->deallocate(new_ptr);
+            throw;
+        }
+
+        // Create DataPtr with proper deleter that uses the allocator
+        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cpu_alloc));
+
+        // Update Storage: This frees old memory and sets new one
+        this->impl_->mutable_storage().set_data_ptr(std::move(data_));
+        
+        #ifdef WITH_CUDA
+        cudaStream_t cuda_stream = OwnTensor::cuda::getCurrentStream();
+        cudaStreamSynchronize(cuda_stream);
+        #endif
+        
+        this->impl_->mutable_storage().set_device(DeviceIndex(Device::CPU));
+        this->impl_->mutable_storage().set_allocator(cpu_alloc);
+        
+        // Update TensorImpl metadata
+        this->impl_->set_device(DeviceIndex(Device::CPU));
+    }
+
     Tensor Tensor::to_cuda(int device_index) const {
         return to(DeviceIndex(Device::CUDA, device_index));
+    }
+
+    void Tensor::to_cuda_(int device_index) {
+        if (!impl_) {
+             throw std::runtime_error("inplace to_cuda_: tensor is not initialized");
+        }
+
+        DeviceIndex target_device(Device::CUDA, device_index);
+
+        if (this->device().is_cuda() && this->device().index == device_index) {
+            return;
+        }
+
+        #ifdef WITH_CUDA
+        if (!device::cuda_available()) {
+            throw std::runtime_error("CUDA is not available");
+        }
+
+        Allocator* cuda_alloc = AllocatorRegistry::get_allocator(Device::CUDA);
+        if (!cuda_alloc) {
+             throw std::runtime_error("to_cuda_: Failed to get CUDA allocator");
+        }
+        
+        // Ensure we are on the right device for allocation/copy if needed (allocator handles it usually)
+        
+        void* new_ptr = cuda_alloc->allocate(this->nbytes());
+        if (!new_ptr) {
+             throw std::runtime_error("to_cuda_: Failed to allocate memory on CUDA");
+        }
+
+        try {
+            device::copy_memory(new_ptr, Device::CUDA, this->data(), this->device().device, this->nbytes());
+        } catch (...) {
+            cuda_alloc->deallocate(new_ptr);
+            throw;
+        }
+
+        DataPtr data_(static_cast<uint8_t*>(new_ptr), DataPtrDeleter(cuda_alloc));
+
+        this->impl_->mutable_storage().set_data_ptr(std::move(data_));
+        
+        cudaStream_t cuda_stream = OwnTensor::cuda::getCurrentStream();
+        cudaStreamSynchronize(cuda_stream);
+        
+        this->impl_->mutable_storage().set_device(target_device);
+        this->impl_->mutable_storage().set_allocator(cuda_alloc);
+
+        this->impl_->set_device(target_device);
+        #else
+        throw std::runtime_error("CUDA support not compiled");
+        #endif
     }
 
     Tensor Tensor::pin_memory() const {

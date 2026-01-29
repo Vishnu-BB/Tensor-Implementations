@@ -58,4 +58,7 @@ ImplLogs/
 Data-Parallel-DP/
 data2/
 .log
+.csvdata/
+docu/
+.log
 .csv

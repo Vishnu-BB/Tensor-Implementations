@@ -77,7 +77,16 @@ namespace OwnTensor
         // Internal constructor from TensorImpl (for internal use)
         explicit Tensor(intrusive_ptr<TensorImpl> impl) : impl_(std::move(impl)) {}
 
-        //#######################################################
+
+        //Temporary Constuctor for Views (Just to make library compile)
+        // Tensor::Tensor(
+        //         Shape shape,
+        //         // Stride stride,
+        //         // size_t offset,
+        //         Dtype dtype,
+        //         DeviceIndex device,
+        //         bool requires_grad) : Tensor(shape, dtype, device, requires_grad) {}
+        // //#######################################################
         // Internal Access (for advanced use)
         //#######################################################
         
@@ -156,13 +165,17 @@ namespace OwnTensor
         }
 
         // ######################################################
-        // Device Metadata
+        // Device Metadata & Functions
         //#######################################################
-        Tensor to(DeviceIndex device) const;
-        Tensor to_cpu() const;
-        Tensor to_cuda(int device_index = 0) const;
+        Tensor to(DeviceIndex evice) const;
+
         bool is_cpu() const;
         bool is_cuda() const;
+
+        Tensor to_cpu() const;
+        Tensor to_cuda(int device_index = 0) const;
+        void to_cpu_();
+        void to_cuda_(int device_index = 0);
 
         Tensor to_bool() const;
         Tensor pin_memory() const; //✨✨✨
@@ -181,6 +194,21 @@ namespace OwnTensor
         bool owns_grad() const;
         bool is_contiguous() const;
         Tensor contiguous() const;
+
+        //#######################################################
+        // Parallellism Utilities
+        //#######################################################
+
+        TensorOptions opts();
+        Tensor slice(size_t start, size_t length);
+        Tensor flatten_concat(std::vector<Tensor>& tensor_list);
+        Tensor narrow(int64_t axis, int64_t start, int64_t length);
+        std::vector<Tensor> make_shards(size_t num_shards, bool row_major);
+        std::vector<Tensor>make_shards(size_t num_shards, int64_t axis);
+        std::vector<Tensor> make_shards_cust(std::vector<Shape> shard_shapes, bool row_major);
+        std::vector<Tensor> make_shards_inplace(size_t num_shards, bool row_major);
+        std::vector<Tensor> make_shards_inplace_cust(std::vector<Shape> shard_shapes, bool row_major);
+        void shard_into(std::vector<Tensor>& destinations);
 
         //#######################################################
         // Data Manipulation
