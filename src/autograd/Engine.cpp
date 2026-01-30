@@ -146,10 +146,16 @@ struct BackwardContext {
     // Map Node* -> NodeTask
     // Access to this map is read-only during execution
     std::unordered_map<Node*, std::unique_ptr<NodeTask>> graph_tasks;
-    
-    // Thread Pool (Static)
-    // We refer to utils::ThreadPool
 };
+
+// Thread-local pointer to the current backward context
+static thread_local std::shared_ptr<BackwardContext> g_current_context = nullptr;
+
+// Centralized Thread Pool Access
+utils::ThreadPool& get_engine_pool() {
+    static utils::ThreadPool pool(std::thread::hardware_concurrency());
+    return pool;
+}
 
 // =============================================================================
 // Sequential Backward Implementation
@@ -351,8 +357,8 @@ void backward_parallel(const Tensor& root, const Tensor& root_grad) {
         }
     }
 
-    // Execution Setup
-    static utils::ThreadPool thread_pool(std::thread::hardware_concurrency());
+    // Execution Setup - Use centralized pool
+    utils::ThreadPool& thread_pool = get_engine_pool();
     
     // Seed root gradient
     {
@@ -368,62 +374,71 @@ void backward_parallel(const Tensor& root, const Tensor& root_grad) {
         Node* node;
         
         void operator()() {
-            NodeTask* task = ctx->graph_tasks.at(node).get();
+            // Set thread-local context for this worker thread
+            g_current_context = ctx;
             
-            variable_list node_inputs;
-            bool has_grad = false;
-            {
-                std::lock_guard<std::mutex> lock(task->mutex);
-                node_inputs.resize(task->max_output_nr + 1);
-                for (auto& [slot, grads] : task->input_grads_map) {
-                    if (!grads.empty()) {
-                        Tensor sum = grads[0];
-                        if (!sum.is_contiguous()) sum = sum.contiguous();
-                        for (size_t i = 1; i < grads.size(); ++i) {
-                            Tensor next_grad = grads[i];
-                            if (!next_grad.is_contiguous()) next_grad = next_grad.contiguous();
-                            sum = operator+(sum, next_grad);
-                        }
-                        node_inputs[slot] = sum;
-                        has_grad = true;
-                    }
-                }
-                task->input_grads_map.clear();
-            }
-            
-            variable_list input_grads;
-            if (has_grad) {
-                input_grads = (*node)(std::move(node_inputs));
-            }
-            
-            // Always release variables and propagate to dependencies
-            node->release_saved_variables();
-            
-            const auto& edges = node->next_edges();
-            for (size_t i = 0; i < edges.size(); ++i) {
-                if (!edges[i].is_valid()) continue;
+            try {
+                NodeTask* task = ctx->graph_tasks.at(node).get();
                 
-                Node* next_node = edges[i].function.get();
-                uint32_t slot = edges[i].input_nr;
-                
-                NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
-                bool ready = false;
+                variable_list node_inputs;
+                bool has_grad = false;
                 {
-                    std::lock_guard<std::mutex> lock(next_task->mutex);
-                    if (i < input_grads.size() && input_grads[i].is_valid()) {
-                       next_task->input_grads_map[slot].push_back(std::move(input_grads[i]));
-                       if (slot > next_task->max_output_nr) next_task->max_output_nr = slot;
+                    std::lock_guard<std::mutex> lock(task->mutex);
+                    node_inputs.resize(task->max_output_nr + 1);
+                    for (auto& [slot, grads] : task->input_grads_map) {
+                        if (!grads.empty()) {
+                            Tensor sum = grads[0];
+                            if (!sum.is_contiguous()) sum = sum.contiguous();
+                            for (size_t i = 1; i < grads.size(); ++i) {
+                                Tensor next_grad = grads[i];
+                                if (!next_grad.is_contiguous()) next_grad = next_grad.contiguous();
+                                sum = operator+(sum, next_grad);
+                            }
+                            node_inputs[slot] = sum;
+                            has_grad = true;
+                        }
                     }
-                    next_task->dependencies--;
-                    if (next_task->dependencies == 0 && !next_task->scheduled) {
-                        next_task->scheduled = true;
-                        ready = true;
-                    }
+                    task->input_grads_map.clear();
                 }
                 
-                if (ready) {
-                    schedule(ctx, next_node);
+                variable_list input_grads;
+                if (has_grad) {
+                    input_grads = (*node)(std::move(node_inputs));
                 }
+                
+                // Always release variables and propagate to dependencies
+                node->release_saved_variables();
+                
+                const auto& edges = node->next_edges();
+                for (size_t i = 0; i < edges.size(); ++i) {
+                    if (!edges[i].is_valid()) continue;
+                    
+                    Node* next_node = edges[i].function.get();
+                    uint32_t slot = edges[i].input_nr;
+                    
+                    NodeTask* next_task = ctx->graph_tasks.at(next_node).get();
+                    bool ready = false;
+                    {
+                        std::lock_guard<std::mutex> lock(next_task->mutex);
+                        if (i < input_grads.size() && input_grads[i].is_valid()) {
+                           next_task->input_grads_map[slot].push_back(std::move(input_grads[i]));
+                           if (slot > next_task->max_output_nr) next_task->max_output_nr = slot;
+                        }
+                        next_task->dependencies--;
+                        if (next_task->dependencies == 0 && !next_task->scheduled) {
+                            next_task->scheduled = true;
+                            ready = true;
+                        }
+                    }
+                    
+                    if (ready) {
+                        schedule(ctx, next_node);
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Autograd Engine Error: " << e.what() << std::endl;
+            } catch (...) {
+                std::cerr << "Autograd Engine: Unknown Error" << std::endl;
             }
             
             // Atomic decrement
@@ -432,17 +447,14 @@ void backward_parallel(const Tensor& root, const Tensor& root_grad) {
                  std::lock_guard<std::mutex> lk(ctx->state_mutex);
                  ctx->cv.notify_all();
             }
+
+            // Clear context after task completion
+            g_current_context = nullptr;
         }
         
         static void schedule(std::shared_ptr<BackwardContext> ctx, Node* node) {
             ctx->active_tasks++;
-            static utils::ThreadPool& pool = get_pool();
-            pool.enqueue(TaskFunctor{ctx, node});
-        }
-        
-        static utils::ThreadPool& get_pool() {
-             static utils::ThreadPool pool(std::thread::hardware_concurrency());
-             return pool;
+            get_engine_pool().enqueue(TaskFunctor{ctx, node});
         }
     };
     
@@ -485,6 +497,47 @@ void backward(const Tensor& root, const Tensor* grad_output) {
         backward_sequential(root, root_grad);
     } else {
         backward_parallel(root, root_grad);
+    }
+}
+
+// =============================================================================
+// Queue Callback Implementation
+// =============================================================================
+
+void queue_call_back(std::function<void()> callback) {
+    ExecutionMode mode = get_execution_mode();
+
+    if (mode == ExecutionMode::SEQUENTIAL) {
+        // In sequential mode, or if called outside of any parallel context, execute immediately
+        callback();
+    } else {
+        // Parallel mode
+        auto ctx = g_current_context;
+        if (ctx) {
+            // We are inside a parallel backward pass
+            ctx->active_tasks++;
+            get_engine_pool().enqueue([ctx, cb = std::move(callback)]() {
+                // Set thread-local context for nested callbacks
+                g_current_context = ctx;
+                
+                try {
+                    cb();
+                } catch (...) {
+                    std::cerr << "Autograd Engine: Error in queued callback" << std::endl;
+                }
+                
+                int remaining = --ctx->active_tasks;
+                if (remaining == 0) {
+                    std::lock_guard<std::mutex> lk(ctx->state_mutex);
+                    ctx->cv.notify_all();
+                }
+                
+                g_current_context = nullptr;
+            });
+        } else {
+            // Parallel mode but called outside of a backward pass (standalone use)
+            get_engine_pool().enqueue(std::move(callback));
+        }
     }
 }
 

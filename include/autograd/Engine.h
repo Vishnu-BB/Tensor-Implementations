@@ -71,5 +71,14 @@ std::vector<std::shared_ptr<Node>> topological_sort(const Tensor& root);
  */
 void backward(const Tensor& root, const Tensor* grad_output = nullptr);
 
+/**
+ * @brief Queue a callback to be executed by the autograd engine.
+ * 
+ * In SEQUENTIAL mode, executes immediately on the current thread.
+ * In PARALLEL mode, enqueues to the engine's thread pool.
+ * If called during a backward pass, the engine will wait for completion.
+ */
+void queue_call_back(std::function<void()> callback);
+
 } // namespace autograd
 } // namespace OwnTensor
