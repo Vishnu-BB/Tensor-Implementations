@@ -246,7 +246,7 @@ namespace OwnTensor
         static Tensor ones(Shape shape, TensorOptions opts = {});
         static Tensor empty(Shape shape, TensorOptions opts = {});
         static Tensor slice(OwnTensor::Tensor& tensor, size_t start, size_t length);
-        static Tensor flatten_concat(const std::vector<Tensor>& tensor_list);
+        // static Tensor flatten_concat(const std::vector<Tensor>& tensor_list);
         static Tensor full(Shape shape, TensorOptions, float val);
         // static Tensor rand(Shape shape, TensorOptions opts);
         template <typename U>

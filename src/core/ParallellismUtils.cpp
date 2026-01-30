@@ -45,38 +45,29 @@ namespace OwnTensor
 
     Tensor Tensor::flatten_concat(std::vector<Tensor>& tensor_list)
     {
-        // size_t total_elements = [&](const auto& list) -> size_t{
-        //     size_t total = 0;
-        //     for(auto& curr_tensor : tensor_list){ total += curr_tensor.numel(); }
-        //     return total;
-        // }(tensor_list);
+        if (tensor_list.empty()) {
+            return Tensor();
+        }
 
         int64_t total_elements = std::accumulate(tensor_list.begin(), tensor_list.end(), int64_t(0),
-            [](int64_t sum, const auto& tensor)
-            {
+            [](int64_t sum, const auto& tensor) {
                 return sum + tensor.numel();
-            }
-        );
+            });
 
         Tensor result = Tensor({ {1, total_elements} }, tensor_list[0].opts());
         void* result_ptr = result.data();
         int64_t running_pointer = 0;
 
-
-
         for (const auto& tensor : tensor_list)
         {
-            dispatch_by_dtype(tensor.dtype(), [&](auto dummy)
-                {
+            dispatch_by_dtype(tensor.dtype(), [&](auto dummy) {
                     using T = decltype(dummy);
                     void* new_ptr = (static_cast<T*>(result_ptr) + running_pointer);
                     device::copy_memory(new_ptr, result.device().device, tensor.data(), tensor.device().device, tensor.nbytes());
                     running_pointer += tensor.numel();
-
                 });
         }
         return result;
-
     }
 
     Tensor Tensor::narrow(int64_t axis, int64_t start, int64_t length) {
