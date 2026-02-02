@@ -1,4 +1,5 @@
 #include "mlp/layers.h"
+#include "autograd/operations/MatrixOps.h"
 
 namespace OwnTensor
 {

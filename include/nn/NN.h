@@ -97,6 +97,8 @@ public:
     // Templated add for building incrementally?
     void add(std::shared_ptr<Module> module);
     
+    const std::vector<std::shared_ptr<Module>>& modules() const { return modules_; }
+    
     Tensor forward(const Tensor& input) override;
     std::vector<Tensor> parameters() override;
     void to(DeviceIndex dev) override;

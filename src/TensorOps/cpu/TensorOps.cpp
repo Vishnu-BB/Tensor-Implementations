@@ -3,12 +3,15 @@
 #include "ops/helpers/BroadcastUtils.h"
 #include "ops/TensorOps.h"
 #include "ops/TensorOps.cuh"
+#include "Checkpointing/GradMode.h"
 #include "device/DeviceCore.h"
 #include "dtype/fp4.h"
 #include "dtype/DtypeTraits.h"  //  ADD THIS for promote_dtypes_bool
 #include <driver_types.h>
 #include <stdexcept>
 #include <functional>
+#include "autograd/ops_template.h"
+#include "autograd/backward/BinaryBackward.h"
 
 namespace OwnTensor {
 
@@ -29,39 +32,47 @@ static Tensor promote_if_needed(const Tensor& input, Dtype target_dtype) {
 // ============================================================================
 Tensor operator+(const Tensor& lhs, const Tensor& rhs) 
 {
-    //  1. Determine promoted dtype
-    Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
-    
-    //  2. Convert operands if needed
-    Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
-    Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
-    
-    //  3. Compute output shape (broadcasting)
-    Shape output_shape = lhs_promoted.shape();
-    if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
-        output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+    if (!lhs.unsafeGetTensorImpl() || !rhs.unsafeGetTensorImpl()) {
+        throw std::runtime_error("operator+: One or both operands are uninitialized (null TensorImpl)");
     }
+    return autograd::make_binary_op<autograd::AddBackward>(lhs, rhs,
+        [](const Tensor& lhs, const Tensor& rhs) {
+            //  1. Determine promoted dtype
+            Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
+            
+            //  2. Convert operands if needed
+            Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
+            Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
+            
+            //  3. Compute output shape (broadcasting)
+            Shape output_shape = lhs_promoted.shape();
+            if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
+                output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+            }
 
-    //  4. Create output tensor with promoted dtype
-    Tensor output(output_shape, promoted_dtype, lhs.device(), lhs.requires_grad());
+            //  4. Create output tensor with promoted dtype
+            // autograd::make_binary_op will handle requires_grad
+            Tensor output(output_shape, promoted_dtype, lhs.device());
 
-    //  5. Perform operation
-    if (lhs.device().is_cuda() && rhs.device().is_cuda())
-    {
-        #ifdef WITH_CUDA
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            cuda_add_tensor(lhs_promoted, rhs_promoted, output, stream);
-        #else
-            throw std::runtime_error("Tensor Ops: CUDA support not compiled");
-        #endif
-    }
-    else
-    {
-        apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a + b;
-        });
-    }
-    return output;
+            //  5. Perform operation
+            if (lhs.device().is_cuda() && rhs.device().is_cuda())
+            {
+                #ifdef WITH_CUDA
+                    cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+                    cuda_add_tensor(lhs_promoted, rhs_promoted, output, stream);
+                #else
+                    throw std::runtime_error("Tensor Ops: CUDA support not compiled");
+                #endif
+            }
+            else
+            {
+                apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
+                    return a + b;
+                });
+            }
+            return output;
+        },
+        lhs, rhs);
 }
 
 // ============================================================================
@@ -69,33 +80,40 @@ Tensor operator+(const Tensor& lhs, const Tensor& rhs)
 // ============================================================================
 Tensor operator-(const Tensor& lhs, const Tensor& rhs) 
 {
-    Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
-    Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
-    Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
-    
-    Shape output_shape = lhs_promoted.shape();
-    if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
-        output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+    if (!lhs.unsafeGetTensorImpl() || !rhs.unsafeGetTensorImpl()) {
+        throw std::runtime_error("operator-: One or both operands are uninitialized (null TensorImpl)");
     }
+    return autograd::make_binary_op<autograd::SubBackward>(lhs, rhs,
+        [](const Tensor& lhs, const Tensor& rhs) {
+            Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
+            Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
+            Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
+            
+            Shape output_shape = lhs_promoted.shape();
+            if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
+                output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+            }
 
-    Tensor output(output_shape, promoted_dtype, lhs.device(), lhs.requires_grad());
+            Tensor output(output_shape, promoted_dtype, lhs.device());
 
-    if (lhs.device().is_cuda() && rhs.device().is_cuda())
-    {
-        #ifdef WITH_CUDA
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            cuda_sub_tensor(lhs_promoted, rhs_promoted, output, stream);
-        #else
-            throw std::runtime_error("Tensor Ops: CUDA support not compiled");
-        #endif
-    }
-    else
-    {
-        apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a - b;
-        });
-    }
-    return output;
+            if (lhs.device().is_cuda() && rhs.device().is_cuda())
+            {
+                #ifdef WITH_CUDA
+                    cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+                    cuda_sub_tensor(lhs_promoted, rhs_promoted, output, stream);
+                #else
+                    throw std::runtime_error("Tensor Ops: CUDA support not compiled");
+                #endif
+            }
+            else
+            {
+                apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
+                    return a - b;
+                });
+            }
+            return output;
+        },
+        lhs, rhs);
 }
 
 // ============================================================================
@@ -103,33 +121,40 @@ Tensor operator-(const Tensor& lhs, const Tensor& rhs)
 // ============================================================================
 Tensor operator*(const Tensor& lhs, const Tensor& rhs) 
 {
-    Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
-    Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
-    Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
-    
-    Shape output_shape = lhs_promoted.shape();
-    if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
-        output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+    if (!lhs.unsafeGetTensorImpl() || !rhs.unsafeGetTensorImpl()) {
+        throw std::runtime_error("operator*: One or both operands are uninitialized (null TensorImpl)");
     }
+    return autograd::make_binary_op<autograd::MulBackward>(lhs, rhs,
+        [](const Tensor& lhs, const Tensor& rhs) {
+            Dtype promoted_dtype = promote_dtypes_bool(lhs.dtype(), rhs.dtype());
+            Tensor lhs_promoted = promote_if_needed(lhs, promoted_dtype);
+            Tensor rhs_promoted = promote_if_needed(rhs, promoted_dtype);
+            
+            Shape output_shape = lhs_promoted.shape();
+            if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
+                output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+            }
 
-    Tensor output(output_shape, promoted_dtype, lhs.device(), lhs.requires_grad());
+            Tensor output(output_shape, promoted_dtype, lhs.device());
 
-    if (lhs.device().is_cuda() && rhs.device().is_cuda())
-    {
-        #ifdef WITH_CUDA
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            cuda_mul_tensor(lhs_promoted, rhs_promoted, output, stream);
-        #else
-            throw std::runtime_error("Tensor Ops: CUDA support not compiled");
-        #endif
-    }
-    else
-    {
-        apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a * b;
-        });
-    }
-    return output;
+            if (lhs.device().is_cuda() && rhs.device().is_cuda())
+            {
+                #ifdef WITH_CUDA
+                    cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+                    cuda_mul_tensor(lhs_promoted, rhs_promoted, output, stream);
+                #else
+                    throw std::runtime_error("Tensor Ops: CUDA support not compiled");
+                #endif
+            }
+            else
+            {
+                apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
+                    return a * b;
+                });
+            }
+            return output;
+        },
+        lhs, rhs);
 }
 
 // ============================================================================
@@ -137,35 +162,42 @@ Tensor operator*(const Tensor& lhs, const Tensor& rhs)
 // ============================================================================
 Tensor operator/(const Tensor& lhs, const Tensor& rhs) 
 {
-    //  USE DIVISION-SPECIFIC PROMOTION
-    Dtype promoted_dtype = promote_dtypes_division(lhs.dtype(), rhs.dtype());
-    
-    Tensor lhs_promoted = (lhs.dtype() != promoted_dtype) ? lhs.as_type(promoted_dtype) : lhs;
-    Tensor rhs_promoted = (rhs.dtype() != promoted_dtype) ? rhs.as_type(promoted_dtype) : rhs;
-    
-    Shape output_shape = lhs_promoted.shape();
-    if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
-        output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+    if (!lhs.unsafeGetTensorImpl() || !rhs.unsafeGetTensorImpl()) {
+        throw std::runtime_error("operator/: One or both operands are uninitialized (null TensorImpl)");
     }
+    return autograd::make_binary_op<autograd::DivBackward>(lhs, rhs,
+        [](const Tensor& lhs, const Tensor& rhs) {
+            //  USE DIVISION-SPECIFIC PROMOTION
+            Dtype promoted_dtype = promote_dtypes_division(lhs.dtype(), rhs.dtype());
+            
+            Tensor lhs_promoted = (lhs.dtype() != promoted_dtype) ? lhs.as_type(promoted_dtype) : lhs;
+            Tensor rhs_promoted = (rhs.dtype() != promoted_dtype) ? rhs.as_type(promoted_dtype) : rhs;
+            
+            Shape output_shape = lhs_promoted.shape();
+            if (lhs_promoted.shape().dims != rhs_promoted.shape().dims) {
+                output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
+            }
 
-    Tensor output(output_shape, promoted_dtype, lhs.device(), lhs.requires_grad());
+            Tensor output(output_shape, promoted_dtype, lhs.device());
 
-    if (lhs.device().is_cuda() && rhs.device().is_cuda())
-    {
-        #ifdef WITH_CUDA
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
-            cuda_div_tensor(lhs_promoted, rhs_promoted, output, stream);
-        #else
-            throw std::runtime_error("Tensor Ops: CUDA support not compiled");
-        #endif
-    }
-    else
-    {
-        apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
-            return a / b;
-        });
-    }
-    return output;
+            if (lhs.device().is_cuda() && rhs.device().is_cuda())
+            {
+                #ifdef WITH_CUDA
+                    cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
+                    cuda_div_tensor(lhs_promoted, rhs_promoted, output, stream);
+                #else
+                    throw std::runtime_error("Tensor Ops: CUDA support not compiled");
+                #endif
+            }
+            else
+            {
+                apply_binary_operation(lhs_promoted, rhs_promoted, output, [](auto a, auto b) {
+                    return a / b;
+                });
+            }
+            return output;
+        },
+        lhs, rhs);
 }
 // ============================================================================
 // IN-PLACE OPERATORS (NO TYPE PROMOTION ALLOWED)
@@ -361,7 +393,8 @@ Tensor operator==(const Tensor& lhs, const Tensor& rhs)
     }
 
     //  4. Create output tensor (always Bool dtype)
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     //  5. Perform comparison using promoted types
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
@@ -393,7 +426,8 @@ Tensor operator!=(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -424,7 +458,8 @@ Tensor operator<=(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -465,7 +500,8 @@ Tensor operator>=(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -506,7 +542,8 @@ Tensor operator>(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -547,7 +584,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs_promoted.shape().dims, rhs_promoted.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -584,7 +622,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
             output_shape = Shape{broadcast_shape(lhs.shape().dims, rhs.shape().dims)};
         }
     
-        Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+        Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
         if (lhs.device().is_cuda() && rhs.device().is_cuda())
         {
@@ -616,7 +655,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
             output_shape = Shape{broadcast_shape(lhs.shape().dims, rhs.shape().dims)};
         }
     
-        Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+        Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
         if (lhs.device().is_cuda() && rhs.device().is_cuda())
         {
@@ -648,7 +688,8 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
         output_shape = Shape{broadcast_shape(lhs.shape().dims, rhs.shape().dims)};
     }
 
-    Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && (lhs.requires_grad() || rhs.requires_grad());
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
     if (lhs.device().is_cuda() && rhs.device().is_cuda())
     {
@@ -676,8 +717,9 @@ Tensor operator<(const Tensor& lhs, const Tensor& rhs)
     Tensor logical_NOT(const Tensor& lhs)
     {
         Shape output_shape = lhs.shape();
-        
-        Tensor output(output_shape, Dtype::Bool, lhs.device(), lhs.requires_grad());
+     //  4. Create output tensor (always Bool dtype)
+    bool out_requires_grad = autograd::GradMode::is_enabled() && lhs.requires_grad();
+    Tensor output(output_shape, Dtype::Bool, lhs.device(), out_requires_grad);
 
         if (lhs.device().is_cuda())
         {

@@ -41,12 +41,12 @@ Edge get_grad_edge(Tensor& tensor);
  * @endcode
  */
 template<typename BackwardNode, typename ForwardOp, typename... Args>
-Tensor make_unary_op(const Tensor& x, ForwardOp&& forward_op, Args&&... backward_args) {
+Tensor make_unary_op(const Tensor& x, ForwardOp&& forward_op, Args&&... backward_args) {  // TODO: GradMode::is_enabled()
     // 1. Forward pass
     Tensor result = forward_op(x);
     
     // 2. Build graph if needed
-    if (x.requires_grad()) {
+    if (x.requires_grad()) {    // TODO: GradMode::is_enabled()
         auto grad_fn = std::make_shared<BackwardNode>(std::forward<Args>(backward_args)...);
         
         // Set up edge to input
@@ -96,7 +96,7 @@ Tensor make_binary_op(const Tensor& a, const Tensor& b, ForwardOp&& forward_op, 
     Tensor result = forward_op(a, b);
     
     // 2. Build graph if needed
-    if (a.requires_grad() || b.requires_grad()) {
+    if (a.requires_grad() || b.requires_grad()) {  // TODO: GradMode::is_enabled()
         auto grad_fn = std::make_shared<BackwardNode>(std::forward<Args>(backward_args)...);
         
         // Set up edges to inputs

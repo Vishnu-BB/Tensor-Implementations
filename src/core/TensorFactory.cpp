@@ -8,48 +8,41 @@
 #include <cuda_runtime.h>
 #include <curand.h>
 #include "ops/helpers/ConversionKernels.cuh"
+#include "core/RNG.h"
 
 namespace OwnTensor
 {
     // Helper for CUDA RNG
-    void cuda_rand_uniform(float* data, size_t count, unsigned long seed, cudaStream_t stream)
-    {//✨✨✨
-        curandGenerator_t gen;
-        curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-        curandSetPseudoRandomGeneratorSeed(gen, seed);
-        curandSetStream(gen, stream);//✨✨✨
+    void cuda_rand_uniform(float* data, size_t count, cudaStream_t stream)
+    {
+        curandGenerator_t gen = RNG::get_gpu_generator();
+        curandSetStream(gen, stream);
         curandGenerateUniform(gen, data, count);
-        curandDestroyGenerator(gen);
+        RNG::increment_gpu_offset(count);
     }
 
-    void cuda_rand_uniform(double* data, size_t count, unsigned long seed, cudaStream_t stream)
-    {//✨✨✨
-        curandGenerator_t gen;
-        curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-        curandSetPseudoRandomGeneratorSeed(gen, seed);
-        curandSetStream(gen, stream);//✨✨✨
+    void cuda_rand_uniform(double* data, size_t count, cudaStream_t stream)
+    {
+        curandGenerator_t gen = RNG::get_gpu_generator();
+        curandSetStream(gen, stream);
         curandGenerateUniformDouble(gen, data, count);
-        curandDestroyGenerator(gen);
+        RNG::increment_gpu_offset(count);
     }
 
-    void cuda_rand_normal(float* data, size_t count, unsigned long seed, float sd, cudaStream_t stream)
-    {//✨✨✨
-        curandGenerator_t gen;
-        curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-        curandSetPseudoRandomGeneratorSeed(gen, seed);
-        curandSetStream(gen, stream);//✨✨✨
+    void cuda_rand_normal(float* data, size_t count, float sd, cudaStream_t stream)
+    {
+        curandGenerator_t gen = RNG::get_gpu_generator();
+        curandSetStream(gen, stream);
         curandGenerateNormal(gen, data, count, 0.0f, float(sd));
-        curandDestroyGenerator(gen);
+        RNG::increment_gpu_offset(count);
     }
 
-    void cuda_rand_normal(double* data, size_t count, unsigned long seed, double sd, cudaStream_t stream)
-    {//✨✨✨
-        curandGenerator_t gen;
-        curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-        curandSetPseudoRandomGeneratorSeed(gen, seed);
-        curandSetStream(gen, stream);//✨✨✨
+    void cuda_rand_normal(double* data, size_t count, double sd, cudaStream_t stream)
+    {
+        curandGenerator_t gen = RNG::get_gpu_generator();
+        curandSetStream(gen, stream);
         curandGenerateNormalDouble(gen, data, count, 0.0, sd);
-        curandDestroyGenerator(gen);
+        RNG::increment_gpu_offset(count);
     }
 
 
@@ -86,7 +79,7 @@ namespace OwnTensor
         if (opts.device.is_cpu())
         {
             // CPU implementation - handles all 7 types automatically
-            dispatch_by_dtype(opts.dtype, [&](auto [[maybe_unused]] dummy)
+            dispatch_by_dtype(opts.dtype, [&](auto dummy)
                 {
                     // using T = decltype(dummy);
                     // tensor.fill(T(0.0f));
@@ -212,8 +205,10 @@ namespace OwnTensor
         if (opts.device.is_cpu())
         {
             // CPU random
-            //std::random_device rd;
-            std::mt19937 gen(seed);
+            if (seed != 0) {
+                RNG::set_seed(seed);
+            }
+            auto& gen = RNG::get_cpu_generator();
 
             dispatch_by_dtype(opts.dtype, [&](auto dummy)
                 {
@@ -246,27 +241,28 @@ namespace OwnTensor
         {
             // GPU random
 #ifdef WITH_CUDA
-            // std::random_device rd;
-            // unsigned long seed = rd();
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();//✨✨✨
+            if (seed != 0) {
+                RNG::set_seed(seed);
+            }
+            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
 
             dispatch_by_dtype(opts.dtype, [&](auto dummy)
                 {
                     using T = decltype(dummy);
                     if constexpr (std::is_same_v<T, float>)
                     {
-                        cuda_rand_uniform(static_cast<float*>(tensor.data()), tensor.numel(), seed, stream);
+                        cuda_rand_uniform(static_cast<float*>(tensor.data()), tensor.numel(), stream);
                     }
                     else if constexpr (std::is_same_v<T, double>)
                     {
-                        cuda_rand_uniform(static_cast<double*>(tensor.data()), tensor.numel(), seed, stream);
+                        cuda_rand_uniform(static_cast<double*>(tensor.data()), tensor.numel(), stream);
                     }
                     else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>)
                     {
                         // 1. Allocate temporary float buffer on GPU
                         float* temp_data;
                         cudaMallocAsync(&temp_data, tensor.numel() * sizeof(float), stream);
-                        cuda_rand_uniform(temp_data, tensor.numel(), seed, stream);
+                        cuda_rand_uniform(temp_data, tensor.numel(), stream);
                         convert_type_cuda(temp_data, static_cast<T*>(tensor.data()), tensor.numel(), stream);
                         cudaFreeAsync(temp_data, stream);
                     }
@@ -291,8 +287,10 @@ namespace OwnTensor
         if (opts.device.is_cpu())
         {
             // CPU random
-            //std::random_device rd;
-            std::mt19937 gen(seed);
+            if (seed != 0) {
+                RNG::set_seed(seed);
+            }
+            auto& gen = RNG::get_cpu_generator();
 
             dispatch_by_dtype(opts.dtype, [&](auto dummy)
                 {
@@ -325,27 +323,28 @@ namespace OwnTensor
         {
             // GPU random
 #ifdef WITH_CUDA
-            //std::random_device rd;
-            //unsigned long seed = rd();
-            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();//✨✨✨
+            if (seed != 0) {
+                RNG::set_seed(seed);
+            }
+            cudaStream_t stream = OwnTensor::cuda::getCurrentStream();
 
             dispatch_by_dtype(opts.dtype, [&](auto dummy)
                 {
                     using T = decltype(dummy);
                     if constexpr (std::is_same_v<T, float>)
                     {
-                        cuda_rand_normal(static_cast<float*>(tensor.data()), tensor.numel(), seed, sd, stream);//✨✨✨
+                        cuda_rand_normal(static_cast<float*>(tensor.data()), tensor.numel(), sd, stream);
                     }
                     else if constexpr (std::is_same_v<T, double>)
                     {
-                        cuda_rand_normal(static_cast<double*>(tensor.data()), tensor.numel(), seed, sd, stream);//✨✨✨
+                        cuda_rand_normal(static_cast<double*>(tensor.data()), tensor.numel(), sd, stream);
                     }
                     else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>)
                     {
                         // 1. Allocate temporary float buffer on GPU
                         float* temp_data;
                         cudaMallocAsync(&temp_data, tensor.numel() * sizeof(float), stream);
-                        cuda_rand_normal(temp_data, tensor.numel(), seed, float(sd), stream);
+                        cuda_rand_normal(temp_data, tensor.numel(), float(sd), stream);
                         convert_type_cuda(temp_data, static_cast<T*>(tensor.data()), tensor.numel(), stream);
                         cudaFreeAsync(temp_data, stream);
                     }

@@ -6,6 +6,7 @@
 #include "core/TensorDispatch.h"
 #include "ops/helpers/arith.hpp"
 #include "dtype/DtypeCastUtils.h"
+#include "Checkpointing/GradMode.h"
 
 namespace OwnTensor {
 
@@ -63,7 +64,8 @@ Tensor generic_unary_out_cpu(const Tensor& input_tensor, Dtype output_dtype,
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result = generic_unary_out_cpu(temp, Dtype::Float32, float_op, double_op);
-        Tensor output(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor output(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result, output);
         return output;
     }
@@ -147,13 +149,15 @@ Tensor square_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = square_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
     
     Dtype output_dtype = get_promoted_dtype_square(input_tensor.dtype());
-    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), input_tensor.requires_grad());
+    bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+    Tensor output(input_tensor.shape(), output_dtype, input_tensor.device(), out_requires_grad);
     
     dispatch_by_dtype(input_tensor.dtype(), [&](auto in_type_instance) {
         using InputType = decltype(in_type_instance);
@@ -195,7 +199,8 @@ Tensor power_out_cpu_wrap(const Tensor& input_tensor, int exponent) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -246,7 +251,8 @@ Tensor power_out_cpu_wrap(const Tensor& input_tensor, float exponent) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -296,7 +302,8 @@ Tensor power_out_cpu_wrap(const Tensor& input_tensor, double exponent) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = power_out_cpu_wrap(temp, exponent);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -413,7 +420,8 @@ Tensor square_root_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = square_root_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -474,7 +482,8 @@ Tensor reciprocal_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = reciprocal_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -559,7 +568,8 @@ Tensor negator_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = negator_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -635,7 +645,8 @@ Tensor absolute_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = absolute_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
@@ -696,7 +707,8 @@ Tensor sign_out_cpu_wrap(const Tensor& input_tensor) {
     if (input_tensor.dtype() == Dtype::Bfloat16 || input_tensor.dtype() == Dtype::Float16) {
         Tensor temp = convert_half_to_float32(input_tensor);
         Tensor result_f32 = sign_out_cpu_wrap(temp);
-        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), input_tensor.requires_grad());
+        bool out_requires_grad = autograd::GradMode::is_enabled() && input_tensor.requires_grad();
+        Tensor result(input_tensor.shape(), input_tensor.dtype(), input_tensor.device(), out_requires_grad);
         convert_float32_to_half(result_f32, result);
         return result;
     }
