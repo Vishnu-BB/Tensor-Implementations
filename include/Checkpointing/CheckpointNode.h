@@ -72,7 +72,7 @@ private:
      * This releases the forward function and saved inputs to free memory
      * once the backward pass for this block is complete.
      */
-    void clear_saved_data();
+    // void clear_saved_data();
 };
 
 } // namespace autograd

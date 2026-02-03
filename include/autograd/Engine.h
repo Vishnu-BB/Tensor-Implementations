@@ -55,6 +55,10 @@ ExecutionMode get_execution_mode();
  */
 void set_execution_mode(ExecutionMode mode);
 
+// Near other control functions like set_execution_mode
+void set_dependency_tracking_enabled(bool enabled);
+bool is_dependency_tracking_enabled();
+
 /**
  * @brief Perform topological sort on computational graph.
  * 

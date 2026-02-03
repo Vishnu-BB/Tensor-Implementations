@@ -52,7 +52,8 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
         Tensor input = sv.unpack(shared_from_this());
         if (input.unsafeGetTensorImpl()) {
             // Create a view that shares storage but has its own AutogradMeta.
-            Tensor input_view = input.view(input.shape());
+            Tensor input_view = input.view(input.shape()).detach();
+            
             // Important: We set requires_grad on the view BEFORE enabling GradMode
             // so that it acts as a leaf in the local recomputation graph.
             input_view.set_requires_grad(input_requires_grad_[i]);
@@ -66,7 +67,8 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
     // The initial forward pass was done in no_grad mode, so we must
     // re-enable it here to build the local computational graph.
     GradModeGuard grad_guard(true);
-
+    // Before local backward:
+    set_dependency_tracking_enabled(false); 
     // 5. Re-run forward pass to build the local graph.
     variable_list outputs = forward_fn_(recompute_inputs);
 
@@ -77,15 +79,38 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
             std::to_string(grads.size()) + ")");
     }
 
-    // 6. Trigger local backward pass.
-    // This populates the .grad() of the 'recompute_inputs' tensors.
+    
+    // 6. Disable dependency tracking for local graph
+    set_dependency_tracking_enabled(false);
+    
+    // Set dependencies to a high value for local nodes to prevent eager release
     for (size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].requires_grad() && outputs[i].grad_fn()) {
+            outputs[i].grad_fn()->set_dependencies(999999);
+        }
+    }
+
+    // 7. Run local backward (with null checks)
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (!outputs[i].unsafeGetTensorImpl() || !grads[i].unsafeGetTensorImpl()) {
+            continue;
+        }
         if (outputs[i].requires_grad()) {
             outputs[i].backward(&grads[i]);
         }
     }
 
-    // 7. Collect gradients for inputs.
+    // Re-enable dependency tracking
+    set_dependency_tracking_enabled(true);
+
+    // 8. Manually release after backward completes
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].requires_grad() && outputs[i].grad_fn()) {
+            outputs[i].grad_fn()->release_saved_variables();
+        }
+    }
+
+    // 9. Collect gradients for inputs
     variable_list input_grads;
     input_grads.reserve(recompute_inputs.size());
     for (size_t i = 0; i < recompute_inputs.size(); ++i) {

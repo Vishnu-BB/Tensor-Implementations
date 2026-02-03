@@ -17,7 +17,7 @@
 namespace OwnTensor {
 namespace autograd {
 
-// =============================================================================
+// ============================================================ =================
 // Execution Mode Configuration
 // =============================================================================
 namespace {
@@ -67,7 +67,16 @@ public:
         pool_.push_back(std::move(vec));
     }
 };
+// Getter/Setter for dependency tracking control
+static thread_local bool g_dependency_tracking_enabled = true;
 
+void set_dependency_tracking_enabled(bool enabled) {
+    g_dependency_tracking_enabled = enabled;
+}
+
+bool is_dependency_tracking_enabled() {
+    return g_dependency_tracking_enabled;
+}
 // =============================================================================
 // Topological Sort (Optimized)
 // =============================================================================
@@ -162,6 +171,45 @@ utils::ThreadPool& get_engine_pool() {
 // =============================================================================
 
 /**
+ * @brief Compute dependency counts for all nodes in the graph.
+ * 
+ * This counts how many nodes depend on each node's saved tensors.
+ * Nodes will release their saved tensors when their dependency count reaches zero.
+ * 
+ * Template parameter TaskMap should be std::unordered_map<Node*, TaskType>
+ * where TaskType has a member 'dependencies' (unused here, just for type safety).
+ */
+template<typename TaskMap>
+static void compute_dependencies(const TaskMap& graph_tasks) {
+    // Count how many times each node appears in next_edges
+    std::unordered_map<Node*, int> dependency_counts;
+    
+    for (const auto& [node, task] : graph_tasks) {
+        (void)task; // Unused
+        const auto& edges = node->next_edges();
+        for (const auto& edge : edges) {
+            if (edge.is_valid()) {
+                Node* next_node = edge.function.get();
+                dependency_counts[next_node]++;
+            }
+        }
+    }
+    
+    // Set dependency counts on nodes
+    for (auto& [node, count] : dependency_counts) {
+        node->set_dependencies(count);
+    }
+    
+    // Nodes with no dependencies should have count = 1 (will be released after their backward)
+    for (const auto& [node, task] : graph_tasks) {
+        (void)task; // Unused
+        if (dependency_counts.find(node) == dependency_counts.end()) {
+            node->set_dependencies(1);
+        }
+    }
+}
+
+/**
  * @brief Sequential backward pass with dependency-based execution.
  * 
  * Executes nodes in topological order when all dependencies are satisfied.
@@ -232,20 +280,22 @@ void backward_sequential(const Tensor& root, const Tensor& root_grad) {
         if (slot > task.max_output_nr) task.max_output_nr = slot;
     }
     
-    // Step 3: Ready queue - nodes with zero dependencies
+    // Step 3: Compute dependency counts for eager tensor release
+    if (is_dependency_tracking_enabled()) {
+        compute_dependencies(graph_tasks);
+    }
+    // Step 4: Ready queue - nodes with zero dependencies
     std::queue<Node*> ready_queue;
     ready_queue.push(root_fn.get());
     
 
 
-    // Step 4: Execute nodes in dependency order
+    // Step 5: Execute nodes in dependency order
     int executed_nodes = 0;
     while (!ready_queue.empty()) {
         Node* node = ready_queue.front();
         ready_queue.pop();
         executed_nodes++;
-        
-
         
         SequentialNodeTask& task = graph_tasks.at(node);
         
@@ -276,9 +326,6 @@ void backward_sequential(const Tensor& root, const Tensor& root_grad) {
             input_grads = (*node)(std::move(node_inputs));
         }
         
-        // Always release variables and propagate to dependencies to avoid memory leaks
-        node->release_saved_variables();
-        
         // Propagate gradients (or lack thereof) to next nodes
         const auto& edges = node->next_edges();
         for (size_t i = 0; i < edges.size(); ++i) {
@@ -303,6 +350,10 @@ void backward_sequential(const Tensor& root, const Tensor& root_grad) {
                 ready_queue.push(next_node);
             }
         }
+        
+        // Eagerly release this node's saved tensors after all edges have been processed
+        // This ensures tensors are freed as soon as no more nodes need them
+        node->decrement_and_maybe_release();
     }
 }
 

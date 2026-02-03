@@ -121,6 +121,12 @@ struct Edge {
  * | `next_edges()` | Access edges to predecessor nodes |
  */
 class Node : public std::enable_shared_from_this<Node> {
+private:
+    /// Number of backward nodes that still need this node's saved tensors
+    std::atomic<int> dependencies_remaining_{0};
+
+    /// Mutex for thread-safe access
+    mutable std::mutex dependencies_mutex_;
 public:
     // =========================================================================
     // Constructors
@@ -148,6 +154,7 @@ public:
           topological_nr_(0),
           thread_id_(0),
           next_edges_(std::move(next_edges)) {
+        
         // Compute initial topological number from edges
         for (const auto& edge : next_edges_) {
             update_topological_nr(edge);
@@ -190,7 +197,32 @@ public:
     // =========================================================================
     // Identification
     // =========================================================================
+    /**
+     * @brief Set the number of nodes that depend on this node's saved tensors.
+     * Called during graph construction.
+     */
+    void set_dependencies(int count) {
+        dependencies_remaining_.store(count);
+    }
+    /**
+     * @brief Decrement dependency count and release tensors if count reaches zero.
+     * Returns true if tensors were released.
+     */
+    bool decrement_and_maybe_release() {
+        int remaining = dependencies_remaining_.fetch_sub(1) - 1;
+        if (remaining == 0) {
+            release_saved_variables();
+            return true;
+        }
+        return false;
+    }
     
+    /**
+     * @brief Get current dependency count (for debugging).
+     */
+    int get_dependencies_remaining() const {
+        return dependencies_remaining_.load();
+    }
     /**
      * @brief Get the name of this node type for debugging.
      * 
