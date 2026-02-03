@@ -204,7 +204,6 @@ namespace OwnTensor
 
         if (opts.device.is_cpu())
         {
-            std::cout << "[DEBUG] CPU rand called with lower=" << lower << ", upper=" << upper << std::endl;
             // CPU random
             if (seed != 0) {
                 RNG::set_seed(seed);
