@@ -92,6 +92,7 @@ private:
     std::vector<std::shared_ptr<Module>> modules_;
     
 public:
+    Sequential() = default;
     Sequential(std::initializer_list<Module*> modules);
     
     // Templated add for building incrementally?

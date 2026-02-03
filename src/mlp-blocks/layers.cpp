@@ -1,5 +1,6 @@
 #include "mlp/layers.h"
 #include "autograd/operations/MatrixOps.h"
+#include "autograd/operations/BinaryOps.h"
 
 namespace OwnTensor
 {
@@ -8,8 +9,8 @@ namespace OwnTensor
         Tensor linear(const Tensor& input, const Tensor& weights, const Tensor& bias)
         {
             Tensor weights_t = weights.t();
-            Tensor weighted_sum = OwnTensor::matmul(input, weights_t);
-            Tensor output = weighted_sum + bias;
+            Tensor weighted_sum = OwnTensor::autograd::matmul(input, weights_t);
+            Tensor output = OwnTensor::autograd::add(weighted_sum, bias);
             return output;
         }
 
