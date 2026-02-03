@@ -1,6 +1,7 @@
 #include "core/RNG.h"
 #include <sstream>
 #include <stdexcept>
+#include <iostream>
 
 namespace OwnTensor {
 
@@ -14,11 +15,10 @@ thread_local bool RNG::gpu_gen_initialized_ = false;
 
 std::mt19937& RNG::get_cpu_generator() {
     if (!cpu_gen_) {
-        cpu_gen_ = std::make_unique<std::mt19937>(std::random_device{}());
+        cpu_gen_ = std::make_unique<std::mt19937>(5489u);  // mt19937 default seed
     }
     return *cpu_gen_;
 }
-
 #ifdef WITH_CUDA
 curandGenerator_t RNG::get_gpu_generator() {
     if (!gpu_gen_initialized_) {
@@ -42,13 +42,7 @@ RNGState RNG::get_state() {
     auto& gen = get_cpu_generator();
     std::stringstream ss;
     ss << gen;
-    
-    // Convert stringstream to vector of uint32_t for compact storage
-    // mt19937 state is roughly 624 uint32_t values
-    uint32_t val;
-    while (ss >> val) {
-        state.cpu_state.push_back(val);
-    }
+    state.cpu_state = ss.str();
 
 #ifdef WITH_CUDA
     state.gpu_seed = gpu_seed_;
@@ -62,10 +56,7 @@ RNGState RNG::get_state() {
 void RNG::set_state(const RNGState& state) {
     // Restore CPU state
     auto& gen = get_cpu_generator();
-    std::stringstream ss;
-    for (uint32_t val : state.cpu_state) {
-        ss << val << " ";
-    }
+    std::stringstream ss(state.cpu_state);
     ss >> gen;
 
 #ifdef WITH_CUDA

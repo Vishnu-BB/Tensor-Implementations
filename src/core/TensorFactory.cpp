@@ -2,7 +2,7 @@
 #include "core/TensorDispatch.h"
 #include <random>
 #include "device/DeviceCore.h"//✨✨✨
-
+#include <iostream>
 
 
 #include <cuda_runtime.h>
@@ -204,6 +204,7 @@ namespace OwnTensor
 
         if (opts.device.is_cpu())
         {
+            std::cout << "[DEBUG] CPU rand called with lower=" << lower << ", upper=" << upper << std::endl;
             // CPU random
             if (seed != 0) {
                 RNG::set_seed(seed);
@@ -215,7 +216,7 @@ namespace OwnTensor
                     using T = decltype(dummy);
                     if constexpr (std::is_floating_point_v<T>)
                     {
-                        std::uniform_real_distribution<T> dist(lower, upper);
+                        std::uniform_real_distribution<float> dist(lower, upper);
                         T* data = static_cast<T*>(tensor.data());
                         for (size_t i = 0; i < tensor.numel(); ++i)
                         {
@@ -224,7 +225,7 @@ namespace OwnTensor
                     }
                     else if constexpr (std::is_same_v<T, OwnTensor::float16_t> || std::is_same_v<T, OwnTensor::bfloat16_t>)
                     {
-                        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                        std::uniform_real_distribution<float> dist(lower, upper);
                         T* data = static_cast<T*>(tensor.data());
                         for (size_t i = 0; i < tensor.numel(); ++i)
                         {

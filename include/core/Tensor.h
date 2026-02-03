@@ -250,12 +250,12 @@ namespace OwnTensor
         // static Tensor flatten_concat(const std::vector<Tensor>& tensor_list);
         static Tensor full(Shape shape, TensorOptions, float val);
         // static Tensor rand(Shape shape, TensorOptions opts);
-        template <typename U>
-        static Tensor rand(Shape shape, TensorOptions opts,unsigned long seed = 42, U lower = U(0), U upper = U(0));
+        template <typename U = float>
+        static Tensor rand(Shape shape, TensorOptions opts,unsigned long seed = 0, U lower = U(0.0), U upper = U(1.0));
 
         //static Tensor randn(Shape shape, TensorOptions opts);
-        template <typename U>
-        static Tensor randn(Shape shape, TensorOptions opts,unsigned long seed=42 , U sd = U(1));
+        template <typename U = float>
+        static Tensor randn(Shape shape, TensorOptions opts,unsigned long seed=0 , U sd = U(1.0));
         
         //#######################################################
         // View Operations

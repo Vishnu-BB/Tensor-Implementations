@@ -14,7 +14,8 @@ namespace OwnTensor {
  * @brief Container for RNG states (CPU and GPU).
  */
 struct RNGState {
-    std::vector<uint32_t> cpu_state;
+    // std::vector<uint32_t> cpu_state;
+    std::string cpu_state;
 #ifdef WITH_CUDA
     unsigned long long gpu_seed;
     unsigned long long gpu_offset;
