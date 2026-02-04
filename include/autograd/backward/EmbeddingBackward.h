@@ -21,7 +21,7 @@ private:
     
 public:
     EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int64_t embed_dim);
-    EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int padding_idx);
+    EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int64_t embed_dim, int padding_idx);
     
     std::string name() const override { return "EmbeddingBackward"; }
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;

@@ -11,11 +11,16 @@
 #ifdef WITH_CUDA
 #include "ops/Matmul.cuh"
 #endif
-
+#include "autograd/operations/MatrixOps.h"
+#include "Checkpointing/GradMode.h"
+namespace autograd = OwnTensor::autograd;
 namespace OwnTensor 
 {
     Tensor matmul(const Tensor& A, const Tensor& B, [[maybe_unused]]cudaStream_t stream)
     {
+        if (autograd::GradMode::is_enabled() && (A.requires_grad() || B.requires_grad())) {
+            return autograd::matmul(A, B);
+        }
         // Validate Input Datatypes
         if (A.dtype() != B.dtype())
         {
@@ -84,7 +89,7 @@ namespace OwnTensor
         // std::cout << "]" << std::endl;
 
         Shape output_shape = {output_dims};
-        Tensor output(output_shape, A.dtype(), A.device(), A.requires_grad());
+        Tensor output = Tensor::zeros(output_shape, A.opts().with_req_grad(A.requires_grad()));
 
         // Device Dispatch
         if (A.device().is_cuda() && B.device().is_cuda())

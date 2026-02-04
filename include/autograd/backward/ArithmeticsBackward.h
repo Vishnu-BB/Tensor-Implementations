@@ -94,5 +94,54 @@ public:
     std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
 };
 
+/**
+ * @brief Backward function for Scalar Addition (x + s)
+ */
+class ScalarAddBackward : public Node {
+public:
+    ScalarAddBackward() : Node(1) {}
+    std::string name() const override { return "ScalarAddBackward"; }
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
+/**
+ * @brief Backward function for Scalar Subtraction (x - s) or (s - x)
+ */
+class ScalarSubBackward : public Node {
+private:
+    bool tensor_on_lhs_;
+public:
+    ScalarSubBackward(bool tensor_on_lhs) : Node(1), tensor_on_lhs_(tensor_on_lhs) {}
+    std::string name() const override { return "ScalarSubBackward"; }
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
+/**
+ * @brief Backward function for Scalar Multiplication (x * s)
+ */
+class ScalarMulBackward : public Node {
+private:
+    double scalar_;
+public:
+    ScalarMulBackward(double scalar) : Node(1), scalar_(scalar) {}
+    std::string name() const override { return "ScalarMulBackward"; }
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
+/**
+ * @brief Backward function for Scalar Division (x / s) or (s / x)
+ */
+class ScalarDivBackward : public Node {
+private:
+    double scalar_;
+    bool tensor_on_lhs_;
+    Tensor saved_input_; // only needed if s/x
+public:
+    ScalarDivBackward(double scalar, bool tensor_on_lhs, const Tensor& input = Tensor()) 
+        : Node(1), scalar_(scalar), tensor_on_lhs_(tensor_on_lhs), saved_input_(input) {}
+    std::string name() const override { return "ScalarDivBackward"; }
+    std::vector<Tensor> apply(std::vector<Tensor>&& grads) override;
+};
+
 } // namespace autograd
 } // namespace OwnTensor

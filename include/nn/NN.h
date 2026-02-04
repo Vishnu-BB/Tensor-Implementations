@@ -33,8 +33,11 @@ public:
     
 protected:
     std::vector<Tensor> params_;
-    
+    std::vector<Module*> children_;
+
     void register_parameter(Tensor p);
+    void register_module(Module& m);
+    void register_module(Module* m);
 };
 
 // ============================================================================
@@ -46,14 +49,20 @@ public:
     Tensor weight;
     Tensor bias;
     
+    Linear() = default;
     Linear(int in_features, int out_features, bool bias = true);
     
     Tensor forward(const Tensor& input) override;
-    std::vector<Tensor> parameters() override;
-    void to(DeviceIndex dev) override;
+    // std::vector<Tensor> parameters() override;
+    // void to(DeviceIndex dev) override;
 };
 
 class ReLU : public Module {
+public:
+    Tensor forward(const Tensor& input) override;
+};
+
+class GeLU : public Module {
 public:
     Tensor forward(const Tensor& input) override;
 };
@@ -63,11 +72,12 @@ public:
     Tensor weight;
     int padding_idx;
     
+    Embedding() = default;
     Embedding(int num_embeddings, int embedding_dim, int padding_idx = -1);
     
     Tensor forward(const Tensor& input) override;
-    std::vector<Tensor> parameters() override;
-    void to(DeviceIndex dev) override;
+    // std::vector<Tensor> parameters() override;
+    // void to(DeviceIndex dev) override;
 };
 
 class LayerNorm : public Module {
@@ -75,12 +85,12 @@ public:
     Tensor weight;
     Tensor bias;
     float eps;
-    
+    LayerNorm() = default;
     LayerNorm(int normalized_shape, float eps = 1e-5);
     
     Tensor forward(const Tensor& input) override;
-    std::vector<Tensor> parameters() override;
-    void to(DeviceIndex dev) override;
+    // std::vector<Tensor> parameters() override;
+    // void to(DeviceIndex dev) override;
 };
 
 // ============================================================================
@@ -94,15 +104,16 @@ private:
 public:
     Sequential() = default;
     Sequential(std::initializer_list<Module*> modules);
-    
+    Sequential(const std::vector<Module*>& modules);
+
     // Templated add for building incrementally?
     void add(std::shared_ptr<Module> module);
     
     const std::vector<std::shared_ptr<Module>>& modules() const { return modules_; }
     
     Tensor forward(const Tensor& input) override;
-    std::vector<Tensor> parameters() override;
-    void to(DeviceIndex dev) override;
+    // std::vector<Tensor> parameters() override;
+    // void to(DeviceIndex dev) override;
 };
 
 // ============================================================================

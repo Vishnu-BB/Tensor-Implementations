@@ -60,8 +60,8 @@ std::vector<Tensor> AddBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     
     // grad_a = grad_output, grad_b = grad_output
-    return {reduce_to_shape(grad_output, saved_a_.shape()), 
-            reduce_to_shape(grad_output, saved_b_.shape())};
+    return {reduce_to_shape(grad_output, saved_a_.detach().shape()), 
+            reduce_to_shape(grad_output, saved_b_.detach().shape())};
 }
 
 // ============================================================================
@@ -79,11 +79,11 @@ std::vector<Tensor> MulBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     
     // grad_a = grad_output * b, grad_b = grad_output * a
-    Tensor grad_a = grad_output * saved_b_;
-    Tensor grad_b = grad_output * saved_a_;
+    Tensor grad_a = grad_output * saved_b_.detach();
+    Tensor grad_b = grad_output * saved_a_.detach();
     
-    return {reduce_to_shape(grad_a, saved_a_.shape()), 
-            reduce_to_shape(grad_b, saved_b_.shape())};
+    return {reduce_to_shape(grad_a, saved_a_.detach().shape()), 
+            reduce_to_shape(grad_b, saved_b_.detach().shape())};
 }
 
 // ============================================================================
@@ -102,8 +102,8 @@ std::vector<Tensor> SubBackward::apply(std::vector<Tensor>&& grads) {
     
     // grad_a = grad_output, grad_b = -grad_output
     Tensor neg_grad = grad_output * -1.0;
-    return {reduce_to_shape(grad_output, saved_a_.shape()), 
-            reduce_to_shape(neg_grad, saved_b_.shape())};
+    return {reduce_to_shape(grad_output, saved_a_.detach().shape()), 
+            reduce_to_shape(neg_grad, saved_b_.detach().shape())};
 }
 
 // ============================================================================
@@ -121,16 +121,16 @@ std::vector<Tensor> DivBackward::apply(std::vector<Tensor>&& grads) {
     const Tensor& grad_output = grads[0];
     
     // grad_a = grad_output / b
-    Tensor grad_a = grad_output / saved_b_;
+    Tensor grad_a = grad_output / saved_b_.detach();
     
     // grad_b = -grad_output * a / b^2
     Tensor term1 = grad_output * -1.0;
-    Tensor term2 = term1 * saved_a_;
-    Tensor b_sq = saved_b_ * saved_b_;
+    Tensor term2 = term1 * saved_a_.detach();
+    Tensor b_sq = saved_b_.detach() * saved_b_.detach();
     Tensor grad_b = term2 / b_sq;
     
-    return {reduce_to_shape(grad_a, saved_a_.shape()), 
-            reduce_to_shape(grad_b, saved_b_.shape())};
+    return {reduce_to_shape(grad_a, saved_a_.detach().shape()), 
+            reduce_to_shape(grad_b, saved_b_.detach().shape())};
 }
 
 

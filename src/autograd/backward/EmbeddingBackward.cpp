@@ -14,15 +14,12 @@ EmbeddingBackward::EmbeddingBackward(const Tensor& indices, int64_t vocab_size, 
       vocab_size_(vocab_size),
       embed_dim_(embed_dim) {}
 
-EmbeddingBackward::EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int padding_idx)
+EmbeddingBackward::EmbeddingBackward(const Tensor& indices, int64_t vocab_size, int64_t embed_dim, int padding_idx)
     : Node(1),
       saved_indices_(indices, false),
       vocab_size_(vocab_size),
-      embed_dim_(0) {
-          // padding_idx is not currently used in the backward implementation I saw
-          // but we need to know embed_dim_ to create the gradient tensor.
-          // This constructor is used by MatrixOps.cpp which is likely buggy.
-          // We'll set embed_dim_ to 0 for now just to fix the linker.
+      embed_dim_(embed_dim) {
+          // padding_idx is currently unused
       }
 
 std::vector<Tensor> EmbeddingBackward::apply(std::vector<Tensor>&& grads) {
@@ -31,7 +28,7 @@ std::vector<Tensor> EmbeddingBackward::apply(std::vector<Tensor>&& grads) {
     }
     
     const Tensor& grad_output = grads[0];  // [B, T, C]
-    Tensor indices = saved_indices_.unpack(shared_from_this());  // [B, T]
+    Tensor indices = saved_indices_.unpack(shared_from_this()).detach();  // [B, T]
     
     // Create gradient tensor for weight [vocab_size, embed_dim]
     TensorOptions opts = TensorOptions()

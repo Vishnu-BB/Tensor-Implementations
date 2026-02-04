@@ -32,8 +32,8 @@ std::vector<Tensor> LinearBackward::apply(std::vector<Tensor>&& grads) {
     if (grad_output.is_cuda() && saved_weight_.ndim() == 2) {
         // Case 1: Pure 2D matmul
         if (saved_input_.ndim() == 2 && grad_output.ndim() == 2) {
-            grad_input = Tensor(saved_input_.shape(), saved_input_.dtype(), saved_input_.device());
-            grad_weight = Tensor(saved_weight_.shape(), saved_weight_.dtype(), saved_weight_.device());
+            grad_input = Tensor::zeros(saved_input_.shape(), saved_input_.opts());
+            grad_weight = Tensor::zeros(saved_weight_.shape(), saved_weight_.opts());
             cuda_matmul_backward(grad_output, saved_input_, saved_weight_, grad_input, grad_weight, 0);
             computed_main_grads = true;
         }
@@ -45,8 +45,8 @@ std::vector<Tensor> LinearBackward::apply(std::vector<Tensor>&& grads) {
             Tensor a_flat = saved_input_.reshape(Shape{{-1, hidden_dim}});
             Tensor g_flat = grad_output.reshape(Shape{{-1, output_dim}});
             
-            Tensor grad_input_flat(a_flat.shape(), a_flat.dtype(), a_flat.device());
-            grad_weight = Tensor(saved_weight_.shape(), saved_weight_.dtype(), saved_weight_.device());
+            Tensor grad_input_flat = Tensor::zeros(a_flat.shape(), a_flat.opts());
+            grad_weight = Tensor::zeros(saved_weight_.shape(), saved_weight_.opts());
             
             cuda_matmul_backward(g_flat, a_flat, saved_weight_, grad_input_flat, grad_weight, 0);
             
@@ -64,7 +64,7 @@ std::vector<Tensor> LinearBackward::apply(std::vector<Tensor>&& grads) {
         if (computed_main_grads) {
             result.push_back(grad_input);
         } else {
-            result.push_back(matmul(grad_output, saved_weight_.t()));
+            result.push_back(OwnTensor::matmul(grad_output.detach(), saved_weight_.detach().t()));
         }
     } else {
         result.push_back(Tensor());
@@ -76,11 +76,11 @@ std::vector<Tensor> LinearBackward::apply(std::vector<Tensor>&& grads) {
             result.push_back(grad_weight);
         } else {
             if (grad_output.ndim() == 3) {
-                Tensor flat_input = saved_input_.reshape(Shape{{-1, saved_input_.shape().dims.back()}});
-                Tensor flat_grad = grad_output.reshape(Shape{{-1, grad_output.shape().dims.back()}});
-                result.push_back(matmul(flat_input.t(), flat_grad));
+                Tensor flat_input = saved_input_.detach().reshape(Shape{{-1, saved_input_.shape().dims.back()}});
+                Tensor flat_grad = grad_output.detach().reshape(Shape{{-1, grad_output.shape().dims.back()}});
+                result.push_back(OwnTensor::matmul(flat_input.detach().t(), flat_grad.detach()));
             } else {
-                result.push_back(matmul(saved_input_.t(), grad_output));
+                result.push_back(OwnTensor::matmul(saved_input_.detach().t(), grad_output.detach()));
             }
         }
     } else {
@@ -92,7 +92,7 @@ std::vector<Tensor> LinearBackward::apply(std::vector<Tensor>&& grads) {
 #ifdef WITH_CUDA
         if (grad_output.is_cuda()) {
              // Create output tensor
-             Tensor grad_bias = Tensor(Shape{{grad_output.shape().dims.back()}}, grad_output.dtype(), grad_output.device());
+             Tensor grad_bias = Tensor::zeros(Shape{{grad_output.shape().dims.back()}}, grad_output.opts());
              cuda_linear_bias_backward(grad_output, grad_bias, 0); // stream 0
              result.push_back(grad_bias);
         } else 

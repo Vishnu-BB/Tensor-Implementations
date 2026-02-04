@@ -28,16 +28,7 @@ Tensor LayerNorm::forward(const Tensor& input) {
     return autograd::layer_norm(input, weight, bias, normalized_shape, eps);
 }
 
-std::vector<Tensor> LayerNorm::parameters() {
-    std::vector<Tensor> p = {weight};
-    if (bias.is_valid()) p.push_back(bias);
-    return p;
-}
-
-void LayerNorm::to(DeviceIndex dev) {
-    weight = weight.to(dev);
-    if (bias.is_valid()) bias = bias.to(dev);
-}
+// parameters() and to() are handled by base Module since parameters are registered.
 
 } // namespace nn
 } // namespace OwnTensor

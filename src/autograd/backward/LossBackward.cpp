@@ -38,7 +38,7 @@ std::vector<Tensor> MSELossBackward::apply(std::vector<Tensor>&& grads) {
              grad_val = *grad_output.data<float>();
          }
 
-         Tensor diff = saved_pred_ - saved_target_;
+         Tensor diff = saved_pred_.detach() - saved_target_.detach();
          grad_pred = diff * (scale * grad_val);
     }
     
@@ -77,7 +77,7 @@ std::vector<Tensor> MAELossBackward::apply(std::vector<Tensor>&& grads) {
              grad_val = *grad_output.data<float>();
          }
 
-         Tensor diff = saved_pred_ - saved_target_;
+         Tensor diff = saved_pred_.detach() - saved_target_.detach();
          Tensor zero = Tensor::zeros(diff.shape(), 
              TensorOptions().with_dtype(diff.dtype()).with_device(diff.device()));
          Tensor ones = Tensor::ones(diff.shape(),
@@ -129,8 +129,8 @@ std::vector<Tensor> BCELossBackward::apply(std::vector<Tensor>&& grads) {
          Tensor ones = Tensor::ones(saved_pred_.shape(),
              TensorOptions().with_dtype(saved_pred_.dtype()).with_device(saved_pred_.device()));
          
-         Tensor term1 = saved_target_ / saved_pred_ * -1.0f;
-         Tensor term2 = (ones - saved_target_) / (ones - saved_pred_);
+         Tensor term1 = saved_target_.detach() / saved_pred_.detach() * -1.0f;
+         Tensor term2 = (ones - saved_target_.detach()) / (ones - saved_pred_.detach());
          grad_pred = (term1 + term2) * (scale * grad_val);
     }
     
@@ -175,7 +175,7 @@ std::vector<Tensor> CCELossBackward::apply(std::vector<Tensor>&& grads) {
          return {grad_pred};
     }
 
-    Tensor grad_pred = saved_target_ / saved_pred_ * -1.0f;
+    Tensor grad_pred = saved_target_.detach() / saved_pred_.detach() * -1.0f;
     
     float scale = 1.0f / static_cast<float>(numel_);
     

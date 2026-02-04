@@ -20,7 +20,7 @@ std::vector<Tensor> SquareBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("SquareBackward: no grads");
     
     // grad_x = grad_output * 2 * input
-    return {grads[0] * 2.0 * saved_input_};
+    return {grads[0] * 2.0 * saved_input_.detach()};
 }
 
 // ============================================================================
@@ -34,7 +34,7 @@ std::vector<Tensor> SqrtBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("SqrtBackward: no grads");
     
     // grad_x = grad_output / (2 * sqrt(input))
-    Tensor sqrt_x = OwnTensor::sqrt(saved_input_);
+    Tensor sqrt_x = OwnTensor::sqrt(saved_input_.detach());
     return {grads[0] / (2.0 * sqrt_x)};
 }
 
@@ -59,7 +59,7 @@ std::vector<Tensor> AbsBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("AbsBackward: no grads");
     
     // grad_x = grad_output * sign(input)
-    Tensor s = OwnTensor::sign(saved_input_);
+    Tensor s = OwnTensor::sign(saved_input_.detach());
     return {grads[0] * s};
 }
 
@@ -74,7 +74,7 @@ std::vector<Tensor> ReciprocalBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("ReciprocalBackward: no grads");
     
     // grad_x = -grad_output / input^2
-    Tensor input_sq = saved_input_ * saved_input_;
+    Tensor input_sq = saved_input_.detach() * saved_input_.detach();
     return {grads[0] * -1.0 / input_sq};
 }
 
@@ -89,8 +89,35 @@ std::vector<Tensor> PowBackward::apply(std::vector<Tensor>&& grads) {
     if (grads.empty()) throw std::runtime_error("PowBackward: no grads");
     
     // grad_x = grad_output * exponent * input^(exponent-1)
-    Tensor derived = OwnTensor::pow(saved_input_, static_cast<double>(exponent_) - 1.0);
+    Tensor derived = OwnTensor::pow(saved_input_.detach(), static_cast<double>(exponent_) - 1.0);
     return {grads[0] * static_cast<double>(exponent_) * derived};
+}
+
+// ============================================================================
+// Scalar Arithmetic Backward Nodes
+// ============================================================================
+
+std::vector<Tensor> ScalarAddBackward::apply(std::vector<Tensor>&& grads) {
+    return {grads[0]};
+}
+
+std::vector<Tensor> ScalarSubBackward::apply(std::vector<Tensor>&& grads) {
+    if (tensor_on_lhs_) return {grads[0]};
+    return {grads[0] * -1.0};
+}
+
+std::vector<Tensor> ScalarMulBackward::apply(std::vector<Tensor>&& grads) {
+    return {grads[0] * scalar_};
+}
+
+std::vector<Tensor> ScalarDivBackward::apply(std::vector<Tensor>&& grads) {
+    if (tensor_on_lhs_) {
+        return {grads[0] / scalar_};
+    } else {
+        // y = s / x  => dy/dx = -s / x^2
+        Tensor x_sq = saved_input_.detach() * saved_input_.detach();
+        return {grads[0] * (-scalar_) / x_sq};
+    }
 }
 
 } // namespace autograd

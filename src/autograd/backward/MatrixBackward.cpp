@@ -69,7 +69,7 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
         if (saved_a_.ndim() == 2 && grad_output.ndim() == 2) {
             Tensor grad_a(saved_a_.shape(), saved_a_.dtype(), saved_a_.device());
             Tensor grad_b(saved_b_.shape(), saved_b_.dtype(), saved_b_.device());
-            cuda_matmul_backward(grad_output, saved_a_, saved_b_, grad_a, grad_b, 0);
+            cuda_matmul_backward(grad_output, saved_a_.detach(), saved_b_.detach(), grad_a, grad_b, 0);
             return {grad_a, grad_b};
         }
         
@@ -80,8 +80,8 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
             int64_t output_dim = grad_output.shape().dims.back();
             
             // Flatten: [B,T,Hidden] -> [B*T, Hidden], [B,T,Out] -> [B*T, Out]
-            Tensor a_flat = saved_a_.reshape(Shape{{-1, hidden_dim}});
-            Tensor g_flat = grad_output.reshape(Shape{{-1, output_dim}});
+            Tensor a_flat = saved_a_.detach().reshape(Shape{{-1, hidden_dim}});
+            Tensor g_flat = grad_output.detach().reshape(Shape{{-1, output_dim}});
             
             // grad_a_flat = g_flat @ B^T = [B*T, Out] @ [Out, Hidden] -> [B*T, Hidden]
             // grad_b = a_flat^T @ g_flat = [Hidden, B*T] @ [B*T, Out] -> [Hidden, Out]
@@ -90,7 +90,7 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
             Tensor grad_b(saved_b_.shape(), saved_b_.dtype(), saved_b_.device());
             
             // Use optimized kernel on flattened 2D tensors
-            cuda_matmul_backward(g_flat, a_flat, saved_b_, grad_a_flat, grad_b, 0);
+            cuda_matmul_backward(g_flat, a_flat, saved_b_.detach(), grad_a_flat, grad_b, 0);
             
             // Reshape grad_a back to original shape
             Tensor grad_a = grad_a_flat.reshape(saved_a_.shape());
@@ -102,10 +102,10 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
     
     // TODO: CPU fallback
     // CPU/General CUDA path with explicit transpose
-    Tensor b_t = saved_b_.t();
+    Tensor b_t = saved_b_.detach().t();
     
-    Tensor grad_a = matmul(grad_output, b_t);
-    grad_a = reduce_to_shape(grad_a, saved_a_.shape());
+    Tensor grad_a = OwnTensor::matmul(grad_output, b_t);
+    grad_a = reduce_to_shape(grad_a, saved_a_.detach().shape());
     
     Tensor grad_b;
     
@@ -116,17 +116,17 @@ std::vector<Tensor> MatmulBackward::apply(std::vector<Tensor>&& grads) {
         int64_t output_dim = grad_output.shape().dims.back();
         
         // Reshape [B, T, Hidden] -> [B*T, Hidden]
-        Tensor a_flat = saved_a_.reshape(Shape{{-1, hidden_dim}});
+        Tensor a_flat = saved_a_.detach().reshape(Shape{{-1, hidden_dim}});
         // Reshape [B, T, C] -> [B*T, C]
-        Tensor g_flat = grad_output.reshape(Shape{{-1, output_dim}});
+        Tensor g_flat = grad_output.detach().reshape(Shape{{-1, output_dim}});
         
         // [Hidden, BT] @ [BT, C] -> [Hidden, C] (implicitly sums over B*T)
-        grad_b = matmul(a_flat.t(), g_flat);
+        grad_b = OwnTensor::matmul(a_flat.t(), g_flat);
     } else {
         // General case
-        Tensor a_t = saved_a_.t();
-        grad_b = matmul(a_t, grad_output);
-        grad_b = reduce_to_shape(grad_b, saved_b_.shape());
+        Tensor a_t = saved_a_.detach().t();
+        grad_b = OwnTensor::matmul(a_t, grad_output);
+        grad_b = reduce_to_shape(grad_b, saved_b_.detach().shape());
     }
     
     return {grad_a, grad_b};

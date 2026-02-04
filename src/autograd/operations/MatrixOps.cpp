@@ -8,13 +8,17 @@
 #include "ops/Kernels.h"
 #include "ops/TensorOps.h"
 #include <algorithm>
+#include "Checkpointing/GradMode.h"
 
 namespace OwnTensor {
 namespace autograd {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
     return make_binary_op<MatmulBackward>(a, b,
-        [](const Tensor& x, const Tensor& y) { return OwnTensor::matmul(x, y); },
+        [](const Tensor& x, const Tensor& y) {
+            NoGradGuard guard;
+            return OwnTensor::matmul(x, y);
+        },
         a, b);  // Pass a, b to MatmulBackward constructor
 }
 
