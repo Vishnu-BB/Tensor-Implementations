@@ -122,20 +122,20 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
     }
 
     // 8. Clear saved data to free memory.
-    // clear_saved_data();
+    release_saved_variables();
 
     return input_grads;
 }
 
-// void CheckpointNode::clear_saved_data() {
-//     // Release the forward function.
-//     forward_fn_ = nullptr;
+void CheckpointNode::release_saved_variables() {
+    // Release the forward function.
+    forward_fn_ = nullptr;
     
-//     // Release the saved inputs.
-//     for (auto& sv : saved_inputs_) {
-//         sv.reset();
-//     }
-// }
+    // Release the saved inputs.
+    for (auto& sv : saved_inputs_) {
+        sv.reset();
+    }
+}
 
 } // namespace autograd
 } // namespace OwnTensor

@@ -67,12 +67,9 @@ private:
     size_t num_outputs_;
 
     /**
-     * @brief Clear saved data after recomputation.
-     * 
-     * This releases the forward function and saved inputs to free memory
-     * once the backward pass for this block is complete.
+     * @brief Release saved variables to break reference cycles and free memory.
      */
-    // void clear_saved_data();
+    void release_saved_variables() override;
 };
 
 } // namespace autograd
