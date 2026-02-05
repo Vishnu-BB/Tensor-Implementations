@@ -61,4 +61,5 @@ data2/
 .csvdata/
 docu/
 .log
-.csv
+*.csv
+*.md
