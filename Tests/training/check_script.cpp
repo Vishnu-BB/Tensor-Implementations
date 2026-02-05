@@ -15,7 +15,7 @@ int rank;
 bool print = false;
 struct Config{
 public:
-    int64_t batch = 8;
+    int64_t batch = 4;
     int64_t val_steps = 250;
     int64_t tokens = 1024;
     int64_t n_embd = 384;
@@ -117,8 +117,7 @@ public:
         auto posemb = pos_emb(pos);
         auto x = tokemb + posemb;
 
-        // Use checkpoint_sequential to save memory
-        // Split 20 layers into 5 segments (4 layers each)
+        // Use checkpoint_sequential to save memory for the transformer blocks
         OwnTensor::variable_list outputs = OwnTensor::autograd::checkpoint_sequential(
             transformer_blocks, 5, {x});
         
@@ -128,13 +127,20 @@ public:
     }
 
     OwnTensor::Tensor calc_loss(OwnTensor::Tensor& predicted, OwnTensor::Tensor& target){
-        auto B = predicted.shape().dims[0];
-        auto T = predicted.shape().dims[1];
-        auto logits = logit_linear(predicted);
-        logits = logits.reshape({{B*T, config.V}});
-        target = target.reshape({{B*T}});
-        auto loss = OwnTensor::autograd::sparse_cross_entropy_loss(logits, target);
-        return loss;
+        // Checkpoint the logit linear and loss calculation to avoid storing the massive logits tensor
+        auto loss_fn = [this, &target](const OwnTensor::variable_list& inputs) -> OwnTensor::variable_list {
+            auto x = inputs[0];
+            auto B = x.shape().dims[0];
+            auto T = x.shape().dims[1];
+            auto logits = logit_linear(x);
+            logits = logits.reshape({{B*T, config.V}});
+            auto local_target = target.reshape({{B*T}});
+            auto loss = OwnTensor::autograd::sparse_cross_entropy_loss(logits, local_target);
+            return {loss};
+        };
+
+        auto outputs = OwnTensor::autograd::checkpoint(loss_fn, {predicted});
+        return outputs[0];
     }
 
 private:
@@ -185,7 +191,7 @@ int main(){
     int world_size;
     int64_t steps = 20;
     rank = 0;
-    std::ofstream log_file("/home/blubridge-029/agtensor/Tensor-Implementations/Tests/training/logs/log1.csv");
+    std::ofstream log_file("/home/blubridge-029/agtensor/Tensor-Implementations/Tests/training/log/log1.csv");
     log_file << "step,loss,val_loss,lr,tok_per_s\n";
     log_file << std::fixed << std::setprecision(6); 
     log_file.flush();
@@ -233,7 +239,7 @@ int main(){
             // nvtxRangePop();
             auto loss = model.calc_loss(prediction, target);
             loss = loss/grad_accum_steps;
-            loss_acc += loss;
+            loss_acc += loss.detach();
             // nvtxRangePush("Backend Start");
             loss.backward();
             // nvtxRangePop();

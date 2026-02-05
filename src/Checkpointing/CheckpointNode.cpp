@@ -67,6 +67,13 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
     // The initial forward pass was done in no_grad mode, so we must
     // re-enable it here to build the local computational graph.
     GradModeGuard grad_guard(true);
+
+    // RAII guard to ensure release_saved_variables() is called even if recompute or backward fails.
+    struct ReleaseGuard {
+        CheckpointNode* node;
+        ~ReleaseGuard() { if (node) node->release_saved_variables(); }
+    } release_guard{this};
+
     // Before local backward:
     set_dependency_tracking_enabled(false); 
     // 5. Re-run forward pass to build the local graph.
@@ -103,7 +110,7 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
     // Re-enable dependency tracking
     set_dependency_tracking_enabled(true);
 
-    // 8. Manually release after backward completes
+    // 8. Manually release local graph nodes after backward completes
     for (size_t i = 0; i < outputs.size(); ++i) {
         if (outputs[i].requires_grad() && outputs[i].grad_fn()) {
             outputs[i].grad_fn()->release_saved_variables();
@@ -121,8 +128,9 @@ variable_list CheckpointNode::apply(variable_list&& grads) {
         }
     }
 
-    // 8. Clear saved data to free memory.
+    // 10. Clear saved data to free memory.
     release_saved_variables();
+    release_guard.node = nullptr; // Already released, no need for guard to call it again.
 
     return input_grads;
 }

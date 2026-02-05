@@ -225,7 +225,7 @@ int main(){
             // nvtxRangePop();
             auto loss = model.calc_loss(prediction, target);
             loss = loss/grad_accum_steps;
-            loss_acc += loss;
+            loss_acc += loss.detach();
             // nvtxRangePush("Backend Start");
             loss.backward();
             // nvtxRangePop();

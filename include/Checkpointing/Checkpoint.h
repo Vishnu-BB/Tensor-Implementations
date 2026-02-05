@@ -39,6 +39,10 @@ variable_list checkpoint(
 /**
  * @brief Checkpoint a sequential model by splitting it into segments.
  * 
+ * @note This implementation currently assumes a single tensor flows through the 
+ *       sequence. It uses only the first element of the input `variable_list` 
+ *       for each segment.
+ * 
  * @param model The sequential model to checkpoint.
  * @param segments Number of segments to split the model into.
  * @param inputs Input tensors to the model.
